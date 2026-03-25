@@ -5,6 +5,7 @@ on:
       pdf_url:
         description: 'Paste the BOP PDF URL here'
         required: true
+        default: 'https://bop.diba.cat/anuncio/descargar-pdf/3912642'
 
 jobs:
   scan_pdf:
@@ -19,7 +20,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install Libraries
-        run: pip install requests pdfplumber
+        run: pip install requests pdfplumber urllib3
 
       - name: Run Sniper Script
         run: python test_bop.py
