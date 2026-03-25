@@ -1,0 +1,27 @@
+name: Check Spanish Lead
+on:
+  workflow_dispatch:
+    inputs:
+      pdf_url:
+        description: 'Paste the BOP PDF URL here'
+        required: true
+
+jobs:
+  scan_pdf:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Libraries
+        run: pip install requests pdfplumber
+
+      - name: Run Sniper Script
+        run: python test_bop.py
+        env:
+          TARGET_URL: ${{ github.event.inputs.pdf_url }}
