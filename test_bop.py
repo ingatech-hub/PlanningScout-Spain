@@ -63,7 +63,9 @@ def test_spanish_pdf(url):
     print("========================================")
 
 if __name__ == "__main__":
-    if pdf_url == "https://bop.diba.cat/anuncio/descargar-pdf/3912642":
+    import os
+# This reads the URL from the GitHub Action input
+pdf_url = os.getenv("TARGET_URL", "https://bop.diba.cat/anuncio/descargar-pdf/3912642")
         print("⚠️  Please paste a real PDF URL into the code first!")
     else:
         test_spanish_pdf(pdf_url)
