@@ -11,7 +11,18 @@
   ],
   "min_declared_value_eur": 50000,
   "keywords_include": [],
-  "keywords_exclude": ["menor", "vallado", "señalización"],
+  "keywords_exclude": [
+    "menor", 
+    "vallado", 
+    "señalización", 
+    "vado", 
+    "tala de arbolado", 
+    "terraza", 
+    "veladores", 
+    "zanjas",
+    "piscina individual",
+    "rótulo"
+  ],
   "weekly_digest_day": "Monday",
   "weekly_digest_time": "08:00"
 }
