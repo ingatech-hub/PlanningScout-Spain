@@ -233,27 +233,29 @@ DENY_PHRASES = [
 ]
 
 def search_keyword(keyword, P, date_from, date_to):
-    """Search BOCM using the exact hardcoded Drupal routing structure."""
+    """Search BOCM for one keyword, return list of result URLs."""
     urls  = []
     seen  = set()
     page  = 0
-    fmt   = "%d-%m-%Y"  # Fixed date format to match BOCM's exact requirement
+    fmt   = "%d/%m/%Y"
+    next_url = None # We will store the actual "Next" link here
 
     while True:
-        start_str = date_from.strftime(fmt)
-        end_str = date_to.strftime(fmt)
-
-        # Using the exact URL routing you discovered
-        base_url = f"{BOCM_BASE}/advanced-search/p/field_bulletin_field_date/date__{start_str}/field_bulletin_field_date_1/date__{end_str}/seccion/8387"
-
-        params = {
-            "search_api_views_fulltext_1": keyword
-        }
-        if page > 0:
-            params["page"] = page
-
-        req_url = base_url + "?" + urlencode(params)
-        r = safe_get(req_url)
+        if page == 0:
+            # First page: Build the search query
+            q = {**P["hidden"], P["text"]: keyword,
+                 P["dfrom"]: date_from.strftime(fmt),
+                 P["dto"]:   date_to.strftime(fmt)}
+            if P["section_field"] and P["section_value"]:
+                q[P["section_field"]] = P["section_value"]
+            
+            if P["method"] == "post":
+                r = safe_post(P["action"], q)
+            else:
+                r = safe_get(P["action"] + "?" + urlencode(q))
+        else:
+            # Pages 1+: Use the EXACT url found in the "Next" button
+            r = safe_get(next_url)
 
         if not r or r.status_code != 200:
             log(f"    Page {page} failed"); break
@@ -277,10 +279,17 @@ def search_keyword(keyword, P, date_from, date_to):
         log(f"    Page {page}: {new} new links")
         if new == 0: break
 
+        # Find the REAL Next button link
         nxt = soup.select_one("li.next a,.pager-next a,.pagination .next a")
         if not nxt:
             nxt = soup.find("a", string=re.compile(r"siguiente|next|»|›", re.I))
-        if not nxt: break
+        
+        # If no next button, or it doesn't have a link, we are done.
+        if not nxt or not nxt.get("href"): 
+            break
+            
+        # Store the exact URL for the next loop
+        next_url = urljoin(BOCM_BASE, nxt.get("href"))
         page += 1
         time.sleep(1.5)
 
