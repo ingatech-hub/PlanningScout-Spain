@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PlanningScout — Radar de Proyectos Madrid</title>
+<meta name="description" content="Detectamos licencias de obra mayor, urbanizaciones y planes especiales en Madrid antes que nadie. Inteligencia de proyectos directamente del BOCM.">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f8f9fc; color: #1a1a2e; }
+
+  /* ─── NAV ─────────────────────────────────────────────── */
+  nav {
+    background: white;
+    border-bottom: 1px solid #e8e8e8;
+    padding: 16px 48px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .nav-logo { font-size: 20px; font-weight: 700; color: #1565c0; }
+  .nav-logo span { color: #0d47a1; }
+  .nav-cta {
+    background: #1565c0; color: white;
+    padding: 10px 24px; border-radius: 8px;
+    text-decoration: none; font-weight: 600; font-size: 14px;
+    transition: background .2s;
+  }
+  .nav-cta:hover { background: #0d47a1; }
+
+  /* ─── HERO ────────────────────────────────────────────── */
+  .hero {
+    background: linear-gradient(135deg, #1565c0 0%, #0d47a1 60%, #01579b 100%);
+    color: white;
+    padding: 90px 48px 80px;
+    text-align: center;
+  }
+  .hero-badge {
+    display: inline-block;
+    background: rgba(255,255,255,.15);
+    border: 1px solid rgba(255,255,255,.3);
+    color: white;
+    padding: 6px 18px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 28px;
+    letter-spacing: .5px;
+  }
+  .hero h1 {
+    font-size: clamp(32px, 5vw, 56px);
+    font-weight: 800;
+    line-height: 1.15;
+    margin-bottom: 20px;
+    max-width: 820px;
+    margin-left: auto; margin-right: auto;
+  }
+  .hero h1 span { color: #82b1ff; }
+  .hero p {
+    font-size: 18px;
+    opacity: .88;
+    max-width: 620px;
+    margin: 0 auto 40px;
+    line-height: 1.6;
+  }
+  .hero-btns { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+  .btn-primary {
+    background: white; color: #1565c0;
+    padding: 16px 36px; border-radius: 10px;
+    text-decoration: none; font-weight: 700; font-size: 16px;
+    transition: transform .15s, box-shadow .15s;
+    box-shadow: 0 4px 20px rgba(0,0,0,.15);
+  }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 28px rgba(0,0,0,.2); }
+  .btn-secondary {
+    background: rgba(255,255,255,.15); color: white;
+    border: 2px solid rgba(255,255,255,.5);
+    padding: 14px 32px; border-radius: 10px;
+    text-decoration: none; font-weight: 600; font-size: 16px;
+    transition: background .2s;
+  }
+  .btn-secondary:hover { background: rgba(255,255,255,.25); }
+
+  /* ─── STATS BAR ───────────────────────────────────────── */
+  .stats-bar {
+    background: white;
+    border-bottom: 1px solid #e8e8e8;
+    display: flex;
+    justify-content: center;
+    gap: 0;
+    flex-wrap: wrap;
+  }
+  .stat {
+    padding: 28px 48px;
+    text-align: center;
+    border-right: 1px solid #e8e8e8;
+    flex: 1;
+    min-width: 180px;
+  }
+  .stat:last-child { border-right: none; }
+  .stat .val { font-size: 32px; font-weight: 800; color: #1565c0; }
+  .stat .lbl { font-size: 13px; color: #666; margin-top: 4px; }
+
+  /* ─── HOW IT WORKS ────────────────────────────────────── */
+  .section { padding: 80px 48px; max-width: 1100px; margin: 0 auto; }
+  .section-label {
+    text-align: center;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: #1565c0;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+  .section h2 {
+    text-align: center;
+    font-size: 34px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    color: #0d1b4b;
+  }
+  .section .subtitle {
+    text-align: center;
+    color: #666;
+    font-size: 17px;
+    max-width: 580px;
+    margin: 0 auto 56px;
+    line-height: 1.6;
+  }
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 32px;
+  }
+  .step {
+    background: white;
+    border-radius: 14px;
+    padding: 32px 28px;
+    box-shadow: 0 2px 16px rgba(0,0,0,.06);
+    position: relative;
+  }
+  .step-num {
+    width: 42px; height: 42px;
+    background: #e3f2fd;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 800; color: #1565c0;
+    margin-bottom: 20px;
+  }
+  .step h3 { font-size: 17px; font-weight: 700; margin-bottom: 10px; }
+  .step p  { font-size: 14px; color: #555; line-height: 1.6; }
+
+  /* ─── SEGMENTS ────────────────────────────────────────── */
+  .segments-wrap { background: #f0f4ff; padding: 80px 48px; }
+  .segments { max-width: 1100px; margin: 0 auto; }
+  .segments-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 24px;
+  }
+  .seg-card {
+    background: white;
+    border-radius: 14px;
+    padding: 32px 28px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.06);
+    border-top: 4px solid #1565c0;
+  }
+  .seg-card.orange { border-color: #e65100; }
+  .seg-card.purple { border-color: #6a1b9a; }
+  .seg-card.red    { border-color: #b71c1c; }
+  .seg-icon { font-size: 32px; margin-bottom: 16px; }
+  .seg-card h3 { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+  .seg-card .price {
+    font-size: 22px; font-weight: 800; color: #1565c0; margin-bottom: 16px;
+  }
+  .seg-card ul { list-style: none; padding: 0; }
+  .seg-card ul li {
+    font-size: 14px; color: #444;
+    padding: 6px 0;
+    border-bottom: 1px solid #f0f0f0;
+    display: flex; gap: 8px;
+  }
+  .seg-card ul li:last-child { border-bottom: none; }
+  .seg-card ul li::before { content: "✓"; color: #1565c0; font-weight: 700; }
+
+  /* ─── SAMPLE LEAD ─────────────────────────────────────── */
+  .sample { background: white; padding: 80px 48px; }
+  .sample-inner { max-width: 900px; margin: 0 auto; }
+  .lead-card {
+    border: 1px solid #e0e0e0;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0,0,0,.08);
+  }
+  .lead-card-header {
+    background: linear-gradient(135deg, #1565c0, #0d47a1);
+    color: white;
+    padding: 20px 28px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .lead-card-header .badge {
+    background: rgba(255,255,255,.2);
+    padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 700;
+  }
+  .lead-card-body { padding: 28px; }
+  .lead-row { display: flex; gap: 40px; flex-wrap: wrap; margin-bottom: 20px; }
+  .lead-field { flex: 1; min-width: 160px; }
+  .lead-field .field-label { font-size: 11px; color: #999; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+  .lead-field .field-val { font-size: 15px; font-weight: 600; color: #1a1a2e; }
+  .lead-field .field-val.big { font-size: 22px; color: #1565c0; }
+  .lead-desc { font-size: 14px; color: #444; line-height: 1.6; background: #f8f9fc; padding: 16px; border-radius: 8px; }
+  .chip { background: #e3f2fd; color: #0d47a1; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+
+  /* ─── CTA SECTION ─────────────────────────────────────── */
+  .cta-section {
+    background: linear-gradient(135deg, #0d47a1, #1565c0);
+    color: white;
+    text-align: center;
+    padding: 80px 48px;
+  }
+  .cta-section h2 { font-size: 36px; font-weight: 800; margin-bottom: 16px; }
+  .cta-section p  { font-size: 18px; opacity: .88; max-width: 540px; margin: 0 auto 40px; line-height: 1.6; }
+
+  /* ─── FOOTER ──────────────────────────────────────────── */
+  footer {
+    background: #0a0f2e;
+    color: rgba(255,255,255,.5);
+    text-align: center;
+    padding: 32px;
+    font-size: 13px;
+  }
+  footer strong { color: rgba(255,255,255,.8); }
+
+  @media (max-width: 640px) {
+    nav { padding: 14px 20px; }
+    .hero { padding: 60px 24px; }
+    .section { padding: 60px 24px; }
+    .segments-wrap { padding: 60px 24px; }
+    .sample { padding: 60px 24px; }
+    .stat { padding: 20px 24px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="nav-logo">🏗️ Planning<span>Scout</span></div>
+  <a href="https://planningscout.streamlit.app" class="nav-cta">Acceder al radar →</a>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-badge">🔴 LIVE · Actualizado diariamente desde el BOCM</div>
+  <h1>Detectamos proyectos de<br><span>construcción en Madrid</span><br>antes que nadie</h1>
+  <p>Licencias de obra mayor, urbanizaciones y planes especiales — extraídos automáticamente del BOCM y organizados por tipo de proyecto y presupuesto.</p>
+  <div class="hero-btns">
+    <a href="https://planningscout.streamlit.app" class="btn-primary">Ver radar en vivo →</a>
+    <a href="#segmentos" class="btn-secondary">¿Para quién es?</a>
+  </div>
+</section>
+
+<!-- STATS BAR -->
+<div class="stats-bar">
+  <div class="stat">
+    <div class="val">Diario</div>
+    <div class="lbl">Frecuencia de actualización</div>
+  </div>
+  <div class="stat">
+    <div class="val">BOCM</div>
+    <div class="lbl">Fuente oficial verificada</div>
+  </div>
+  <div class="stat">
+    <div class="val">+72</div>
+    <div class="lbl">Municipios de Madrid monitorizados</div>
+  </div>
+  <div class="stat">
+    <div class="val">€5.6B</div>
+    <div class="lbl">PEM detectado este mes</div>
+  </div>
+</div>
+
+<!-- HOW IT WORKS -->
+<div class="section">
+  <div class="section-label">Cómo funciona</div>
+  <h2>Tu equipo de inteligencia de obra</h2>
+  <p class="subtitle">Sin Excel. Sin búsquedas manuales. Sin leer boletines de 200 páginas.</p>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <h3>Escaneo diario del BOCM</h3>
+      <p>Nuestro sistema lee automáticamente el Boletín Oficial de la Comunidad de Madrid cada mañana a las 7am.</p>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <h3>Clasificación con IA</h3>
+      <p>GPT-4o extrae el promotor, la dirección, el PEM y el tipo de proyecto de cada documento oficial.</p>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <h3>Puntuación de oportunidad</h3>
+      <p>Cada lead recibe una puntuación 0-100 según presupuesto, tipo de obra y calidad de los datos extraídos.</p>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <h3>Dashboard + email semanal</h3>
+      <p>Accedes al radar filtrado por tu perfil y recibes el resumen de la semana cada lunes a las 8am.</p>
+    </div>
+  </div>
+</div>
+
+<!-- SEGMENTS -->
+<div class="segments-wrap" id="segmentos">
+  <div class="segments">
+    <div class="section-label" style="text-align:center">Para quién</div>
+    <h2 style="text-align:center;font-size:34px;font-weight:700;margin-bottom:16px">Un perfil para cada negocio</h2>
+    <p class="subtitle" style="text-align:center;margin-bottom:40px">Filtramos los leads según lo que necesita tu empresa. Tú ves solo lo que te importa.</p>
+    <div class="segments-grid">
+      <div class="seg-card">
+        <div class="seg-icon">🔧</div>
+        <h3>Instaladores</h3>
+        <div class="price">desde €199/mes</div>
+        <ul>
+          <li>Obras de rehabilitación y reforma integral</li>
+          <li>Cambios de uso a residencial</li>
+          <li>Nuevas construcciones con instalaciones MEP</li>
+          <li>Licencias de primera ocupación (finishing)</li>
+          <li>PEM mínimo configurable</li>
+        </ul>
+      </div>
+      <div class="seg-card orange">
+        <div class="seg-icon">📐</div>
+        <h3>Promotores Medianos</h3>
+        <div class="price" style="color:#e65100">desde €299/mes</div>
+        <ul>
+          <li>Nuevas construcciones residenciales</li>
+          <li>Planes especiales aprobados definitivamente</li>
+          <li>Urbanizaciones en tramitación</li>
+          <li>Desglose de etapas y PEM por fase</li>
+          <li>Datos del promotor y expediente</li>
+        </ul>
+      </div>
+      <div class="seg-card red">
+        <div class="seg-icon">🏢</div>
+        <h3>Gran Constructora / Fondo</h3>
+        <div class="price" style="color:#b71c1c">desde €499/mes</div>
+        <ul>
+          <li>Urbanizaciones &gt;€5M (Juntas de Compensación)</li>
+          <li>Planes especiales e infraestructuras</li>
+          <li>Proyectos industriales y logísticos</li>
+          <li>Acceso multi-usuario para Estudios</li>
+          <li>API disponible (plan Enterprise)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SAMPLE LEAD -->
+<div class="sample">
+  <div class="sample-inner">
+    <div class="section-label" style="text-align:center">Ejemplo real</div>
+    <h2 style="text-align:center;font-size:34px;font-weight:700;margin-bottom:40px;color:#0d1b4b">Así se ve un lead en el radar</h2>
+    <div class="lead-card">
+      <div class="lead-card-header">
+        <div>
+          <div style="font-size:11px;opacity:.7;margin-bottom:4px;letter-spacing:1px">LEAD PRIORITARIO · 75 PTS</div>
+          <div style="font-size:18px;font-weight:700">Paracuellos de Jarama · Área de Desarrollo AD-10</div>
+        </div>
+        <div class="badge">🟢 Urbanización</div>
+      </div>
+      <div class="lead-card-body">
+        <div class="lead-row">
+          <div class="lead-field">
+            <div class="field-label">PEM Total</div>
+            <div class="field-val big">€74.1M</div>
+          </div>
+          <div class="lead-field">
+            <div class="field-label">Promotor</div>
+            <div class="field-val">Junta de Compensación AD-10</div>
+          </div>
+          <div class="lead-field">
+            <div class="field-label">Tipo</div>
+            <div class="field-val"><span class="chip">urbanización</span></div>
+          </div>
+          <div class="lead-field">
+            <div class="field-label">Fecha BOCM</div>
+            <div class="field-val">27 Mar 2026</div>
+          </div>
+        </div>
+        <div class="lead-desc">
+          Aprobación definitiva del Proyecto de Reparcelación del Área de Desarrollo AD-10 en Paracuellos de Jarama. PEM Etapa 1: €25.0M · Etapa 2: €49.1M. Facilitando el desarrollo urbano de la zona norte de la localidad con infraestructura completa de viales, saneamiento y suministros.
+        </div>
+        <div style="margin-top:16px;display:flex;gap:12px;flex-wrap:wrap">
+          <a href="https://planningscout.streamlit.app" style="color:#1565c0;font-size:13px;font-weight:600;text-decoration:none">📍 Ver en mapa →</a>
+          <a href="https://planningscout.streamlit.app" style="color:#1565c0;font-size:13px;font-weight:600;text-decoration:none">📄 Ver en BOCM →</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CTA -->
+<section class="cta-section">
+  <h2>1 mes gratis, sin tarjeta</h2>
+  <p>Prueba el radar con leads reales de esta semana. Sin compromisos. Solo tu opinión al final del mes.</p>
+  <div class="hero-btns">
+    <a href="https://planningscout.streamlit.app" class="btn-primary">Acceder al radar ahora →</a>
+  </div>
+  <p style="margin-top:24px;font-size:13px;opacity:.6">¿Preguntas? Escríbenos a hola@planningscout.com</p>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <strong>PlanningScout</strong> · Inteligencia de proyectos de construcción para Madrid<br>
+  Datos extraídos del BOCM (registros públicos oficiales de la Comunidad de Madrid) · PEM = Presupuesto de Ejecución Material
+</footer>
+
+</body>
+</html>
