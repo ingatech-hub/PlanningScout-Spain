@@ -1161,9 +1161,8 @@ def write_permit(p, pdf_url=""):
                     "cell":{"userEnteredFormat":{"backgroundColor":{"red":rb,"green":gb,"blue":bb}}},
                     "fields":"userEnteredFormat.backgroundColor"}}]})
             except: pass
-        log(f"  💾 [{p.get('lead_score',0):02d}pts] {muni} | {addr[:40]} | "
-            f"{p.get('permit_type','?')[:20]} | €{dec:,.0f}" if dec else
-            f"  💾 [{p.get('lead_score',0):02d}pts] {muni} | {addr[:40]} | {p.get('permit_type','?')[:20]}")
+        _dec_str = f"€{dec:,.0f}" if dec else "N/A"
+        log(f"  💾 [{p.get('lead_score',0):02d}pts] {muni} | {addr[:40]} | {p.get('permit_type','?')[:20]} | {_dec_str}")
         return True
     except Exception as e:
         log(f"  ❌ Write: {e}"); return False
@@ -1203,9 +1202,17 @@ def send_digest():
         rhtml = ""
         for r in recent:
             raw_v = str(r[5]).strip() if len(r) > 5 and r[5] else ""
-            dec   = f"€{int(float(re.sub(r'[^\d.]','',raw_v.replace('.','').replace(',','.'))))  :,}" if raw_v else "—"
+            if raw_v:
+                _cv = re.sub(r'[^\d.]', '', raw_v.replace('.', '').replace(',', '.'))
+                dec = f"€{int(float(_cv)):,}" if _cv else "—"
+            else:
+                dec = "—"
             raw_e = str(r[6]).strip() if len(r) > 6 and r[6] else ""
-            est   = f"€{int(float(re.sub(r'[^\d.]','',raw_e.replace('.','').replace(',','.'))))  :,}" if raw_e else "—"
+            if raw_e:
+                _ce = re.sub(r'[^\d.]', '', raw_e.replace('.', '').replace(',', '.'))
+                est = f"€{int(float(_ce)):,}" if _ce else "—"
+            else:
+                est = "—"
             sc    = get_score(r)
             sc_c  = "#1b5e20" if sc >= 65 else "#e65100" if sc >= 40 else "#b71c1c"
             sc_bg = "#e8f5e9" if sc >= 65 else "#fff3e0" if sc >= 40 else "#fce4ec"
