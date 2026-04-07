@@ -153,43 +153,48 @@ PROFILES = {
         "description": "Todos los proyectos detectados esta semana",
         "min_score": 0,
         "min_value": 0,
+        # Empty list = no type filter applied = show everything
         "permit_types": [],
         "color": "#1565c0",
     },
     "🔧 Instaladores": {
         "description": "Obra mayor, cambios de uso y rehabilitaciones. Ideal para instaladores de ascensores, HVAC y protección contra incendios.",
-        "min_score": 15,
-        "min_value": 100_000,
+        "min_score": 0,
+        "min_value": 50_000,
+        # Broad — installers care about any significant building work
         "permit_types": [
-            "obra mayor nueva construcción",
-            "obra mayor rehabilitación",
+            "obra mayor",           # matches: obra mayor nueva construcción, obra mayor rehabilitación, obra mayor industrial
             "cambio de uso",
-            "declaración responsable obra mayor",
+            "declaración responsable",
             "licencia primera ocupación",
+            "rehabilitación",
+            "reforma",
+            "urbanización",         # urbanizaciones need all trades
         ],
         "color": "#00838f",
     },
     "📐 Promotores Medianos": {
         "description": "Nuevas construcciones, planes especiales y urbanizaciones. Para gestores de proyecto y promotores inmobiliarios.",
-        "min_score": 30,
-        "min_value": 500_000,
+        "min_score": 20,
+        "min_value": 200_000,
         "permit_types": [
-            "obra mayor nueva construcción",
+            "obra mayor",           # any obra mayor qualifies
             "urbanización",
             "plan especial",
-            "plan especial / parcial",
-            "obra mayor industrial",
+            "plan parcial",
+            "declaración responsable",
+            "cambio de uso",
         ],
         "color": "#6a1b9a",
     },
     "🏢 Gran Constructora / Fondo": {
         "description": "Grandes urbanizaciones, infraestructuras y proyectos >€5M. Para FCC, fondos y grandes promotoras.",
-        "min_score": 50,
-        "min_value": 5_000_000,
+        "min_score": 40,
+        "min_value": 1_000_000,
         "permit_types": [
             "urbanización",
             "plan especial",
-            "plan especial / parcial",
+            "plan parcial",
             "obra mayor industrial",
             "obra mayor nueva construcción",
         ],
@@ -295,7 +300,8 @@ cutoff = datetime.now() - timedelta(days=days_back)
 df_f = df[df["fecha_dt"] >= cutoff] if "fecha_dt" in df.columns else df.copy()
 
 # Score filter
-df_f = df_f[df_f["score"] >= min_score_override]
+# Score filter — leads with score=0 may just be unscored, so treat 0 as neutral
+df_f = df_f[(df_f["score"] >= min_score_override) | (df_f["score"] == 0)]
 
 # Value filter
 df_f = df_f[df_f["pem"] >= min_value_override]
