@@ -21,7 +21,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--client",  required=True)
-parser.add_argument("--weeks",   type=int, default=2)
+parser.add_argument("--weeks",   type=int, default=4,
+                    help="Weeks to look back. Use 4 for daily/weekly. Use 8 for initial backfill.")
 parser.add_argument("--digest",  action="store_true")
 parser.add_argument("--resume",  action="store_true")
 args = parser.parse_args()
@@ -210,11 +211,44 @@ SEARCH_KEYWORDS = [
     "plan especial de reforma interior",  # urban reform plan
     "plan especial para",                 # catches many types of plan especial
 
-    # Tier D: Other valuable types
-    "licencia de primera ocupación",      # building done
-    "se concede licencia de actividad para nave",        # warehouse/industrial
-    "se concede licencia de actividad para almacén",     # warehouse
-    "se concede licencia de actividad para centro",      # commercial centers
+    # Tier D: Instaladores MEP — buildings needing elevator/HVAC/fire systems
+    # These are the individual licencias that signal a building project
+    "licencia de primera ocupación",          # building complete — last chance for finishing trades
+    "se concede licencia para edificio",      # any building permit
+    "edificio plurifamiliar",                 # apartment blocks = multiple elevators + HVAC
+    "obra mayor en calle",                    # street address = specific building
+    "obra mayor en avenida",
+    "obra mayor en paseo",
+    "licencia de obras en",                   # very direct individual permit signal
+
+    # Tier E: Expansión Retail / Restauración
+    # Retail expansion directors need: new neighborhoods + commercial zones
+    "cambio de uso a terciario",              # office/retail rezoning
+    "cambio de uso de local a",              # specific space conversion
+    "apertura de local comercial",            # new retail opening
+    "zona de uso terciario",                  # commercial zoning
+    "gran superficie comercial",              # large retail = anchor tenant opportunities
+
+    # Tier F: Industrial / Logística
+    "nave industrial",                        # warehouse / factory permit
+    "almacén",                                # warehouse permit
+    "parque empresarial",                     # business park
+    "plataforma logística",                   # logistics hub
+    "centro de distribución",                 # distribution centre
+    "instalación industrial",                 # generic industrial
+
+    # Tier G: Demolición (signals future new construction)
+    "derribo y nueva planta",                 # demolition + new building
+    "demolición de edificio",                 # standalone demolition permit
+    "demolición y construcción",
+
+    # Tier H: Retail activity licences (for expansion directors)
+    "se concede licencia de actividad para nave",
+    "se concede licencia de actividad para almacén",
+    "se concede licencia de actividad para centro",
+    "se concede licencia de actividad para local",    # generic commercial
+    "se concede licencia de actividad para supermercado",
+    "se concede licencia de actividad para hotel",
 ]
 
 def is_bad_url(url):
@@ -325,9 +359,6 @@ def get_rss_pdf_links(date_from, date_to):
                 href = a["href"]
                 if ".PDF" in href.upper() or ".pdf" in href:
                     full = urljoin(BOCM_BASE, href) if href.startswith("/") else href
-                    # Only individual announcement PDFs, NOT full bulletin editions
-                    # CM_Orden_BOCM = individual announcement (1-2 pages) ✓
-                    # CM_Boletin_BOCM = entire day's gazette (100+ pages, mixed content) ✗
                     if "bocm.es" in full and "CM_Orden_BOCM" in full and full not in pdf_urls:
                         pdf_urls.append(full)
             time.sleep(1)
@@ -530,19 +561,10 @@ HARD_REJECT = [
     "criterio interpretativo vinculante",         # planning interpretation, not a permit
     "regulación del deber de conservación",       # maintenance obligation, not a permit
     # Procurement (not a permit)
-    # "licitación" = tender notice for buying services/goods, NOT a building permit
-    # Individual announcement PDFs that only contain licitación should be rejected
     "licitación", "pliego de cláusulas administrativas",
-    "contrato de servicios", "contrato de suministro",
     # Corrección de errores (typo fix in old document)
     "corrección de errores del bocm",
     "corrección de hipervínculo",
-    # Additional noise from practice
-    "convocatoria de proceso selectivo",
-    "convocatoria de oposiciones",
-    "bases de la convocatoria para",
-    "reglamento de participación ciudadana",
-    "reglamento orgánico municipal",
     # Approval of plans to allow subventions (administrative)
     "aprobación definitiva del plan estratégico de subvenciones",
     "aprobación inicial del expediente de modificación del anexo",
@@ -619,12 +641,12 @@ CONSTRUCTION_SIGNALS = [
     "reforma integral", "reforma estructural",
     "demolición y construcción", "demolición y nueva planta",
     "ampliación de edificio",
-    # Industrial / logistics
-    "nave industrial", "naves industriales", "almacén industrial",
+    # Industrial / logistics / demolition
+    "nave industrial", "naves industriales", "almacén industrial", "almacén",
     "centro logístico", "plataforma logística", "parque empresarial",
     "instalación industrial",
     # Commercial / other
-    "hotel", "bloque de viviendas", "complejo residencial",
+    "hotel", "bloque de viviendas", "complejo residencial", "demolición", "derribo",
     "cambio de uso", "primera ocupación",
     "plan especial", "plan parcial",
     "proyecto urbanístico",
@@ -961,6 +983,8 @@ def keyword_extract(text, url, pub_date):
         res["permit_type"] = "obra mayor rehabilitación"
     elif any(p in t for p in ["reforma","ampliación","cambio de uso","modificación de edificio"]):
         res["permit_type"] = "obra mayor rehabilitación"
+    elif any(p in t for p in ["demolición","derribo"]):
+        res["permit_type"] = "demolición y nueva planta"
     elif "primera ocupación" in t:
         res["permit_type"] = "licencia primera ocupación"
     elif any(p in t for p in ["declaración responsable"]):
