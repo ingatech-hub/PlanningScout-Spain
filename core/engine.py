@@ -21,7 +21,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--client",  required=True)
-parser.add_argument("--weeks",   type=int, default=4,
+parser.add_argument("--weeks",   type=int, default=8,
                     help="Weeks back. Daily=1, weekly=2, backfill=8.")
 parser.add_argument("--digest",  action="store_true")
 parser.add_argument("--resume",  action="store_true")
