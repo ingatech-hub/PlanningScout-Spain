@@ -5,6 +5,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import re
 import html as html_lib
+import html as _html_esc  # alias used in card builder
 import os
 import base64
 
@@ -227,43 +228,61 @@ PROFILES = {
     "🔧 Instaladores MEP": {
         "key": "instaladores",
         "tip": "💡 <strong>Contacta al promotor 6-12 meses antes</strong> de que empiece la obra — antes de que cierre los contratos de instalaciones. La licencia concedida es tu señal de arranque.",
-        "min_score": 0, "min_value": 80_000, "days": 30,
-        "types": ["obra mayor", "cambio de uso", "declaración responsable", "licencia primera ocupación", "urbanización"],
+        "min_score": 0, "min_value": 80_000, "days": 90,
+        "types": ["obra mayor", "obra mayor nueva construcción", "obra mayor rehabilitación",
+                  "cambio de uso", "declaración responsable", "licencia primera ocupación",
+                  "urbanización", "demolición y nueva planta"],
     },
     "🏪 Expansión Retail": {
         "key": "expansion",
         "tip": "💡 <strong>Una urbanización aprobada = nuevo barrio en 2-3 años.</strong> Identifica la ubicación de tu próxima apertura antes de que suba el precio del suelo.",
-        "min_score": 0, "min_value": 0, "days": 60,
-        "types": ["urbanización", "plan especial", "plan parcial", "cambio de uso", "licencia de actividad", "obra mayor nueva construcción"],
+        "min_score": 0, "min_value": 0, "days": 90,
+        "types": ["urbanización", "plan especial", "plan especial / parcial", "plan parcial",
+                  "cambio de uso", "licencia de actividad", "obra mayor nueva construcción"],
     },
     "📐 Promotores / RE": {
         "key": "promotores",
         "tip": "💡 <strong>Reparcelación aprobada = suelo urbanizable.</strong> Contacta a la Junta de Compensación antes de que la operación salga al mercado.",
-        "min_score": 20, "min_value": 300_000, "days": 60,
-        "types": ["urbanización", "plan parcial", "plan especial", "obra mayor nueva construcción", "cambio de uso"],
+        "min_score": 20, "min_value": 0, "days": 180,
+        "types": ["urbanización", "plan parcial", "plan especial", "plan especial / parcial",
+                  "obra mayor nueva construcción", "cambio de uso"],
     },
     "🏢 Gran Constructora": {
         "key": "constructora",
         "tip": "💡 <strong>Aprobación definitiva = licitación en 12-18 meses.</strong> Prepara el dossier técnico y las alianzas antes que la competencia.",
-        "min_score": 35, "min_value": 2_000_000, "days": 90,
-        "types": ["urbanización", "plan especial", "plan parcial", "obra mayor industrial", "obra mayor nueva construcción"],
+        "min_score": 35, "min_value": 0, "days": 180,
+        "types": ["urbanización", "plan especial", "plan especial / parcial", "plan parcial",
+                  "obra mayor industrial", "obra mayor nueva construcción", "licitación de obras"],
+    },
+    "🏗️ Gran Infra (FCC-style)": {
+        "key": "fcc",
+        "tip": "💡 <strong>Las Tablas Oeste €106M, Los Cerros, Tres Cantos UE.5 €17M.</strong> Anticipación de 12-18 meses antes de licitación. Las Juntas de Compensación activas son tu señal.",
+        "min_score": 40, "min_value": 0, "days": 180,
+        "types": ["urbanización", "plan especial / parcial", "plan parcial", "licitación de obras"],
     },
     "🏭 Industrial / Log.": {
         "key": "industrial",
         "tip": "💡 <strong>Licencia de nave = obra en 3-6 meses.</strong> Contacta al promotor para demolición previa o ejecución completa.",
-        "min_score": 0, "min_value": 200_000, "days": 60,
-        "types": ["obra mayor industrial", "urbanización", "obra mayor nueva construcción", "cambio de uso"],
+        "min_score": 0, "min_value": 200_000, "days": 90,
+        "types": ["obra mayor industrial", "urbanización", "obra mayor nueva construcción",
+                  "cambio de uso", "licitación de obras"],
+    },
+    "🚧 Alquiler Maquinaria": {
+        "key": "kiloutou",
+        "tip": "💡 <strong>Llega al constructor ANTES de que empiece la obra.</strong> Cualquier proyecto >€200K = excavadoras, plataformas elevadoras, robots de demolición.",
+        "min_score": 0, "min_value": 200_000, "days": 90,
+        "types": [],
     },
     "🛒 Compras / Materiales": {
         "key": "compras",
         "tip": "💡 <strong>Todos los proyectos grandes = oportunidad de suministro.</strong> Preséntate antes de que la constructora adjudique materiales.",
-        "min_score": 0, "min_value": 150_000, "days": 30,
+        "min_score": 0, "min_value": 150_000, "days": 90,
         "types": [],
     },
     "🏙️ Vista General": {
         "key": "general",
         "tip": "Vista completa de todos los proyectos. Selecciona un perfil en el panel izquierdo para ver solo los leads relevantes para tu sector.",
-        "min_score": 0, "min_value": 0, "days": 14,
+        "min_score": 0, "min_value": 0, "days": 180,
         "types": [],
     },
 }
@@ -436,6 +455,68 @@ def build_card(row):
         + '</div>'
     )
 
+
+    # ── Expandable detail sections (HTML5 <details> — guaranteed to render) ──
+    _SUM = (
+        "cursor:pointer;padding:10px 20px;font-size:12.5px;font-weight:600;"
+        "color:#334155;display:flex;align-items:center;gap:8px;"
+        "outline:none;user-select:none;-webkit-user-select:none;"
+        "list-style:none;border-top:1px solid #f1f5f9;background:#fff;"
+    )
+    _DIV = "padding:4px 20px 16px 20px;"
+    extras_html = ""
+
+    # Description (column I from sheet)
+    desc_full = esc(row.get("descripcion", "") or row.get("Description", ""))
+    if desc_full and len(desc_full) > 10:
+        pv = desc_full[:100] + ("…" if len(desc_full) > 100 else "")
+        extras_html += (
+            "<details><summary style='" + _SUM + "'>"
+            "<span style='font-size:14px'>📋</span>"
+            "<span>Descripción</span>"
+            "<span style='flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;"
+            "font-size:12px;color:#94a3b8;font-weight:400;margin-left:6px;'>" + pv + "</span>"
+            "<span style='font-size:10px;color:#94a3b8;margin-left:8px;flex-shrink:0;'>▼</span>"
+            "</summary><div style='" + _DIV + "'>"
+            "<div style='font-size:13px;color:#374151;line-height:1.65;background:#f8fafc;"
+            "border-radius:10px;padding:14px 16px;'>" + desc_full + "</div>"
+            "</div></details>"
+        )
+
+    # AI Evaluation
+    ai_val = str(row.get("ai_evaluation", "") or row.get("AI Evaluation", "") or "").strip()
+    if ai_val and ai_val.lower() not in ("nan", "none", ""):
+        ai_e = _html_esc.escape(ai_val[:500])
+        extras_html += (
+            "<details><summary style='" + _SUM + "'>"
+            "<span style='font-size:14px'>🤖</span>"
+            "<span>Análisis IA</span>"
+            "<span style='margin-left:auto;font-size:10px;font-weight:600;"
+            "background:#dbeafe;color:#1e40af;border-radius:20px;padding:2px 8px;flex-shrink:0;'>IA</span>"
+            "</summary><div style='" + _DIV + "'>"
+            "<div style='background:#eff6ff;border-radius:10px;padding:14px 16px;'>"
+            "<div style='font-size:11px;font-weight:700;color:#1d4ed8;letter-spacing:.05em;margin-bottom:8px;'>🤖 ANÁLISIS IA</div>"
+            "<div style='font-size:13px;color:#1e3a5f;line-height:1.65;'>" + ai_e + "</div>"
+            "</div></div></details>"
+        )
+
+    # Supplies / Materials
+    sup_val = str(row.get("supplies_needed", "") or row.get("Supplies Needed", "") or "").strip()
+    if sup_val and sup_val.lower() not in ("nan", "none", ""):
+        sup_e = _html_esc.escape(sup_val[:350])
+        extras_html += (
+            "<details><summary style='" + _SUM + "'>"
+            "<span style='font-size:14px'>⚒️</span>"
+            "<span>Materiales y equipos estimados</span>"
+            "<span style='margin-left:auto;font-size:10px;font-weight:600;"
+            "background:#dcfce7;color:#166534;border-radius:20px;padding:2px 8px;flex-shrink:0;'>IA</span>"
+            "</summary><div style='" + _DIV + "'>"
+            "<div style='background:#f0fdf4;border-radius:10px;padding:14px 16px;'>"
+            "<div style='font-size:11px;font-weight:700;color:#15803d;letter-spacing:.05em;margin-bottom:8px;'>⚒️ ESTIMACIÓN MATERIALES</div>"
+            "<div style='font-size:13px;color:#166534;line-height:1.8;'>" + sup_e + "</div>"
+            "</div></div></details>"
+        )
+
     return (
         f'<div style="{SC}">'
         f'{head}'
@@ -445,6 +526,7 @@ def build_card(row):
         f'{addr_html}'
         f'{table_html}'
         f'</div>'
+        f'{extras_html}'
         f'{footer}'
         f'</div>'
     )
@@ -460,7 +542,8 @@ COL_MAP = {
     "Description": "descripcion", "Source URL": "bocm_url",
     "PDF URL": "pdf_url", "Mode": "modo", "Confidence": "confianza",
     "Date Found": "fecha_encontrado", "Lead Score": "score_raw",
-    "Expediente": "expediente",
+    "Expediente": "expediente", "Phase": "fase",
+    "AI Evaluation": "ai_evaluation", "Supplies Needed": "supplies_needed",
 }
 
 @st.cache_data(ttl=300)
@@ -500,9 +583,23 @@ if df_raw.empty:
 df = df_raw.rename(columns={k: v for k, v in COL_MAP.items() if k in df_raw.columns})
 df["pem"]      = df["pem_raw"].apply(parse_val)  if "pem_raw"          in df.columns else pd.Series(0.0, index=df.index)
 df["score"]    = df["score_raw"].apply(parse_sc) if "score_raw"        in df.columns else pd.Series(0,   index=df.index)
-df["fecha_dt"] = pd.to_datetime(
-    df["fecha_encontrado"].str[:10], errors="coerce"
-) if "fecha_encontrado" in df.columns else pd.NaT
+def _best_date(row):
+    """Use the most recent of Date Found and Date Granted.
+    Many leads have fecha_encontrado = fecha_granted (wrong value),
+    so this prevents valid leads from being excluded by date filter."""
+    best = None
+    for col in ["fecha_encontrado", "fecha"]:
+        v = str(row.get(col, "") or "").strip()[:10]
+        if len(v) == 10:
+            try:
+                dt = pd.to_datetime(v)
+                if best is None or dt > best:
+                    best = dt
+            except Exception:
+                pass
+    return best if best is not None else pd.NaT
+
+df["fecha_dt"] = df.apply(_best_date, axis=1)
 
 all_munis = sorted([
     m for m in (df["municipio"].dropna().unique().tolist() if "municipio" in df.columns else [])
@@ -617,7 +714,11 @@ df_f   = df[df["fecha_dt"] >= cutoff].copy() if "fecha_dt" in df.columns else df
 
 if min_score > 0:
     df_f = df_f[(df_f["score"] >= min_score) | (df_f["score"] == 0)]
-df_f = df_f[df_f["pem"] >= min_pem]
+# ── PEM filter: show if PEM meets threshold OR PEM is 0 (not declared in text)
+# Most urbanización/plan especial BOCM texts do NOT include the PEM value —
+# it is only in the PDF annex. Excluding pem=0 removes ~80% of valid leads.
+if min_pem > 0:
+    df_f = df_f[(df_f["pem"] >= min_pem) | (df_f["pem"] == 0)]
 
 if prof["types"] and "tipo" in df_f.columns:
     pat  = "|".join(re.escape(t) for t in prof["types"])
