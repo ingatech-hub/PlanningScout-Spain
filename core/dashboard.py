@@ -228,7 +228,7 @@ PROFILES = {
     "🔧 Instaladores MEP": {
         "key": "instaladores",
         "tip": "💡 <strong>Contacta al promotor 6-12 meses antes</strong> de que empiece la obra — antes de que cierre los contratos de instalaciones. La licencia concedida es tu señal de arranque.",
-        "min_score": 0, "min_value": 80_000, "days": 90,
+        "min_score": 0, "min_value": 80_000, "days": 365,
         "types": ["obra mayor", "obra mayor nueva construcción", "obra mayor rehabilitación",
                   "cambio de uso", "declaración responsable", "licencia primera ocupación",
                   "urbanización", "demolición y nueva planta"],
@@ -236,34 +236,34 @@ PROFILES = {
     "🏪 Expansión Retail": {
         "key": "expansion",
         "tip": "💡 <strong>Una urbanización aprobada = nuevo barrio en 2-3 años.</strong> Identifica la ubicación de tu próxima apertura antes de que suba el precio del suelo.",
-        "min_score": 0, "min_value": 0, "days": 90,
+        "min_score": 0, "min_value": 0, "days": 365,
         "types": ["urbanización", "plan especial", "plan especial / parcial", "plan parcial",
                   "cambio de uso", "licencia de actividad", "obra mayor nueva construcción"],
     },
     "📐 Promotores / RE": {
         "key": "promotores",
         "tip": "💡 <strong>Reparcelación aprobada = suelo urbanizable.</strong> Contacta a la Junta de Compensación antes de que la operación salga al mercado.",
-        "min_score": 20, "min_value": 0, "days": 180,
+        "min_score": 20, "min_value": 0, "days": 365,
         "types": ["urbanización", "plan parcial", "plan especial", "plan especial / parcial",
                   "obra mayor nueva construcción", "cambio de uso"],
     },
     "🏢 Gran Constructora": {
         "key": "constructora",
         "tip": "💡 <strong>Aprobación definitiva = licitación en 12-18 meses.</strong> Prepara el dossier técnico y las alianzas antes que la competencia.",
-        "min_score": 35, "min_value": 0, "days": 180,
+        "min_score": 35, "min_value": 0, "days": 365,
         "types": ["urbanización", "plan especial", "plan especial / parcial", "plan parcial",
                   "obra mayor industrial", "obra mayor nueva construcción", "licitación de obras"],
     },
     "🏗️ Gran Infra (FCC-style)": {
         "key": "fcc",
         "tip": "💡 <strong>Las Tablas Oeste €106M, Los Cerros, Tres Cantos UE.5 €17M.</strong> Anticipación de 12-18 meses antes de licitación. Las Juntas de Compensación activas son tu señal.",
-        "min_score": 40, "min_value": 0, "days": 180,
+        "min_score": 40, "min_value": 0, "days": 365,
         "types": ["urbanización", "plan especial / parcial", "plan parcial", "licitación de obras"],
     },
     "🏭 Industrial / Log.": {
         "key": "industrial",
         "tip": "💡 <strong>Licencia de nave = obra en 3-6 meses.</strong> Contacta al promotor para demolición previa o ejecución completa.",
-        "min_score": 0, "min_value": 200_000, "days": 90,
+        "min_score": 0, "min_value": 200_000, "days": 365,
         "types": ["obra mayor industrial", "urbanización", "obra mayor nueva construcción",
                   "cambio de uso", "licitación de obras"],
     },
@@ -276,13 +276,13 @@ PROFILES = {
     "🛒 Compras / Materiales": {
         "key": "compras",
         "tip": "💡 <strong>Todos los proyectos grandes = oportunidad de suministro.</strong> Preséntate antes de que la constructora adjudique materiales.",
-        "min_score": 0, "min_value": 150_000, "days": 90,
+        "min_score": 0, "min_value": 150_000, "days": 365,
         "types": [],
     },
     "🏙️ Vista General": {
         "key": "general",
         "tip": "Vista completa de todos los proyectos. Selecciona un perfil en el panel izquierdo para ver solo los leads relevantes para tu sector.",
-        "min_score": 0, "min_value": 0, "days": 180,
+        "min_score": 0, "min_value": 0, "days": 365,
         "types": [],
     },
 }
@@ -658,9 +658,9 @@ with st.sidebar:
 
     days_back = st.selectbox(
         "Período",
-        [7, 14, 30, 60, 90],
-        index=[7, 14, 30, 60, 90].index(prof["days"]) if prof["days"] in [7, 14, 30, 60, 90] else 1,
-        format_func=lambda x: f"Últimos {x} días",
+        [7, 14, 30, 60, 90, 180, 365],
+        index=[7, 14, 30, 60, 90, 180, 365].index(prof["days"]) if prof["days"] in [7, 14, 30, 60, 90, 180, 365] else 1,
+        format_func=lambda x: "Todo el historial" if x == 365 else f"Últimos {x} días",
     )
     min_pem   = st.number_input("PEM mínimo (€)", value=prof["min_value"], min_value=0, step=50_000, format="%d")
     min_score = st.slider("Puntuación mínima", 0, 100, value=prof["min_score"], step=5)
