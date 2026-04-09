@@ -1,719 +1,652 @@
-import streamlit as st
-import gspread
-from google.oauth2.service_account import Credentials
-import pandas as pd
-from datetime import datetime, timedelta
-import re
-import html as html_lib
-import os
-import base64
+Dashboard · PY
+Copy
 
-# ════════════════════════════════════════════════════════════
-# PAGE CONFIG
-# ════════════════════════════════════════════════════════════
+import subprocess, sys, base64, os, re, json, urllib.parse, html as html_module
+subprocess.check_call([sys.executable, "-m", "pip", "install",
+    "streamlit", "gspread", "google-auth", "pandas", "requests", "-q"])
+ 
+import streamlit as st
+import pandas as pd
+import gspread
+import requests as http_requests
+from google.oauth2.service_account import Credentials
+from datetime import datetime, timedelta
+ 
 st.set_page_config(
-    page_title="PlanningScout — Madrid",
+    page_title="PlanningScout Madrid",
     page_icon="🏗️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-# ════════════════════════════════════════════════════════════
-# LOGO — base64-encoded for crisp display (no blur)
-# File lives in same folder as this dashboard.py
-# ════════════════════════════════════════════════════════════
-def load_logo_b64():
-    # Try same directory as this file first, then common paths
-    candidates = [
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "navbar.png"),
-        "navbar.png",
-        "core/navbar.png",
-    ]
-    for path in candidates:
-        try:
-            with open(path, "rb") as f:
-                return base64.b64encode(f.read()).decode()
-        except Exception:
-            continue
-    return None
-
-LOGO_B64 = load_logo_b64()
-LOGO_HTML = (
-    f'<img src="data:image/png;base64,{LOGO_B64}" '
-    f'style="width:180px;height:auto;display:block;" alt="PlanningScout">'
-    if LOGO_B64 else
-    '<span style="font-size:17px;font-weight:700;color:#0d1a2b;">🏗️ PlanningScout</span>'
-)
-
-# ════════════════════════════════════════════════════════════
-# AUTH
-# How client access works:
-#   1. Free trial: URL with ?perfil=expansion  → open, no login
-#   2. Paid:       URL with ?token=carlos_vimad → checks Streamlit secrets
-#   3. require_token=true: any URL without valid token → lock screen
-#
-# Clients NEVER need a Streamlit account. They just open the URL.
-# ════════════════════════════════════════════════════════════
-qp             = st.query_params
-url_token      = qp.get("token", "")
-url_profile    = qp.get("perfil", "")
-client_tokens  = {}
-try:
-    ct = st.secrets.get("client_tokens", {})
-    client_tokens = dict(ct) if ct else {}
-except Exception:
-    pass
-
-require_token      = str(st.secrets.get("REQUIRE_TOKEN", "false")).lower() == "true"
-forced_profile_key = None
-if url_token and url_token in client_tokens:
-    forced_profile_key = client_tokens[url_token]
-elif url_profile:
-    forced_profile_key = url_profile.lower().replace(" ", "_")
-
-if require_token and not forced_profile_key:
-    st.markdown("""
-    <div style="min-height:80vh;display:flex;align-items:center;justify-content:center;">
-    <div style="text-align:center;max-width:380px;padding:48px 32px;background:#fff;
-         border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,.1);border:1px solid #e2e8f0;">
-      <div style="font-size:44px;margin-bottom:20px;">🔒</div>
-      <h2 style="font-size:22px;color:#0d1a2b;margin:0 0 12px;font-weight:700;
-          font-family:'Fraunces',Georgia,serif;">Acceso restringido</h2>
-      <p style="color:#64748b;font-size:14px;line-height:1.6;margin:0 0 28px;">
-        Accede mediante el enlace personalizado que te enviamos,
-        o regístrate para tu mes gratuito.
-      </p>
-      <a href="https://planningscout.com" style="display:inline-block;background:#1e3a5f;
-         color:#fff;padding:12px 28px;border-radius:10px;font-weight:600;
-         font-size:14px;text-decoration:none;">Ir a planningscout.com →</a>
-    </div></div>""", unsafe_allow_html=True)
-    st.stop()
-
-SHEET_ID = st.secrets.get("SHEET_ID", "")
-
-# ════════════════════════════════════════════════════════════
-# GLOBAL CSS — only for Streamlit chrome, not card content
-# Card content uses 100% inline styles to bypass Markdown parser
-# ════════════════════════════════════════════════════════════
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,700;1,9..144,400&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-
-#MainMenu { visibility: hidden; }
-footer { visibility: hidden; }
-.stApp { background: #f0f2f5 !important; }
-
-/* Main content padding — breathing room both sides */
-.block-container {
-    padding-top: 28px !important;
-    padding-bottom: 48px !important;
-    padding-left: 48px !important;
-    padding-right: 48px !important;
-    max-width: 1100px !important;
-}
-
-/* Sidebar */
+ 
+st.markdown("""<style>
+[data-testid="stAppViewContainer"] { background:#f0f2f6 }
 [data-testid="stSidebar"] {
-    background: #ffffff !important;
-    border-right: 1px solid #e2e8f0 !important;
+    background:#ffffff; border-right:1px solid #e2e8f0;
+    min-width:260px !important; max-width:280px !important;
 }
-[data-testid="stSidebarContent"] {
-    padding: 20px 20px 32px 20px !important;
+section.main > div { padding-top:1rem }
+#MainMenu, footer, header, .stDeployButton { visibility:hidden; display:none }
+div[role="radiogroup"] > label {
+    border-radius:8px; padding:8px 14px; font-size:13px;
+    font-weight:500; color:#374151; background:#f8fafc;
+    border:1.5px solid #e2e8f0; margin-bottom:4px;
+    display:block; cursor:pointer; transition:all .15s;
 }
-
-/* Sidebar text contrast — all labels dark */
-[data-testid="stSidebar"] label,
-[data-testid="stSidebar"] p,
-[data-testid="stSidebar"] span,
-[data-testid="stSidebar"] .stRadio > div label span {
-    color: #334155 !important;
+div[role="radiogroup"] > label:hover { background:#eff6ff; border-color:#bfdbfe }
+div[role="radiogroup"] > label:has(input:checked) {
+    background:#1e3a5f !important; color:white !important;
+    border-color:#1e3a5f !important; font-weight:600 !important;
 }
-[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
-    font-size: 13px !important;
-    font-weight: 600 !important;
-    color: #334155 !important;
+.stButton>button, .stDownloadButton>button {
+    border-radius:8px; font-weight:600; font-size:13px; padding:6px 16px;
 }
-
-/* Download button */
-.stDownloadButton button {
-    background: #fff !important;
-    color: #1e3a5f !important;
-    border: 1.5px solid #cbd5e1 !important;
-    border-radius: 8px !important;
-    font-size: 13px !important;
-    font-weight: 600 !important;
-}
-.stDownloadButton button:hover {
-    border-color: #1e3a5f !important;
-    background: #eff4fb !important;
-}
-
-/* Refresh button */
-.stButton button {
-    background: #fff !important;
-    color: #334155 !important;
-    border: 1.5px solid #e2e8f0 !important;
-    border-radius: 8px !important;
-    font-size: 13px !important;
-}
-.stButton button:hover {
-    border-color: #1e3a5f !important;
-    color: #1e3a5f !important;
-}
-
-/* Mobile */
-@media (max-width: 768px) {
-    .block-container {
-        padding-left: 16px !important;
-        padding-right: 16px !important;
-        padding-top: 14px !important;
-    }
-}
-</style>
-""", unsafe_allow_html=True)
-
-# ════════════════════════════════════════════════════════════
-# INLINE STYLE CONSTANTS
-# All card HTML uses these — bypasses Streamlit's Markdown parser.
-# Single quotes inside double-quoted Python strings = valid, no escaping.
-# ════════════════════════════════════════════════════════════
-_F  = "font-family:'Plus Jakarta Sans',system-ui,sans-serif"
-_FH = "font-family:'Fraunces',Georgia,serif"
-_FM = "font-family:'JetBrains Mono',monospace"
-
-# Card wrapper
-SC = "background:#fff;border:1.5px solid #e2e8f0;border-radius:14px;overflow:hidden;margin-bottom:14px;box-shadow:0 2px 8px rgba(0,0,0,.05);"
-# Header
-SH  = "background:#f7f8fa;border-bottom:1px solid #e2e8f0;padding:13px 20px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;"
-SLO = "display:flex;align-items:flex-start;gap:8px;min-width:0;flex:1;"
-SDO = "width:8px;height:8px;border-radius:50%;background:#16a34a;flex-shrink:0;margin-top:4px;"
-SMU = f"{_FH};font-size:14px;font-weight:700;color:#0d1a2b;line-height:1.3;"
-SBD = "display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;"
-# Score pills
-SSPG = f"{_FM};font-size:12px;font-weight:500;padding:4px 11px;border-radius:100px;white-space:nowrap;color:#fff;background:#15803d;"
-SSPO = f"{_FM};font-size:12px;font-weight:500;padding:4px 11px;border-radius:100px;white-space:nowrap;color:#fff;background:#b45309;"
-SSPN = f"{_FM};font-size:12px;font-weight:500;padding:4px 11px;border-radius:100px;white-space:nowrap;color:#fff;background:#1e3a5f;"
-SSPD = f"{_FM};font-size:12px;font-weight:500;padding:4px 11px;border-radius:100px;white-space:nowrap;color:#fff;background:#94a3b8;"
-# Status badges (outlined)
-SSBG = f"{_FM};font-size:10px;font-weight:500;padding:4px 10px;border-radius:100px;white-space:nowrap;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;"
-SSBA = f"{_FM};font-size:10px;font-weight:500;padding:4px 10px;border-radius:100px;white-space:nowrap;background:#fffbeb;color:#b45309;border:1px solid #fde68a;"
-SSBN = f"{_FM};font-size:10px;font-weight:500;padding:4px 10px;border-radius:100px;white-space:nowrap;background:#eff4fb;color:#1e3a5f;border:1px solid #bfdbfe;"
-# Body
-SBO  = "padding:16px 20px;"
-SRF  = f"{_FM};font-size:10.5px;color:#94a3b8;margin-bottom:5px;letter-spacing:.03em;"
-STI  = f"{_FH};font-size:17px;font-weight:600;color:#0d1a2b;margin-bottom:5px;line-height:1.3;"
-SAD  = f"{_F};font-size:13px;color:#64748b;display:flex;align-items:flex-start;gap:5px;margin-bottom:14px;line-height:1.4;"
-# Table
-STA  = "border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:12px;"
-SRB  = f"{_F};display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-bottom:1px solid #f1f5f9;gap:12px;"
-SRL  = f"{_F};display:flex;justify-content:space-between;align-items:center;padding:9px 14px;gap:12px;"
-SKE  = f"{_FM};font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;flex-shrink:0;min-width:75px;"
-SVA  = f"{_F};font-size:13px;color:#334155;text-align:right;line-height:1.4;"
-SVP  = f"{_FH};font-size:17px;font-weight:700;color:#1e3a5f;"
-STG  = "display:flex;gap:5px;justify-content:flex-end;flex-wrap:wrap;"
-STA2 = f"{_FM};font-size:10.5px;background:#fffbeb;color:#b45309;border:1px solid #fde68a;padding:3px 8px;border-radius:5px;"
-STN  = f"{_FM};font-size:10.5px;background:#eff4fb;color:#1e3a5f;border:1px solid #bfdbfe;padding:3px 8px;border-radius:5px;"
-STG2 = f"{_FM};font-size:10.5px;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;padding:3px 8px;border-radius:5px;"
-# Footer
-SFO  = "background:#f7f8fa;border-top:1px solid #e2e8f0;padding:10px 20px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;"
-SBP  = f"{_F};display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:#fff;background:#1e3a5f;border:1px solid #1e3a5f;padding:5px 12px;border-radius:7px;text-decoration:none;white-space:nowrap;"
-SBT  = f"{_F};display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:#334155;background:#fff;border:1px solid #cbd5e1;padding:5px 12px;border-radius:7px;text-decoration:none;white-space:nowrap;"
-SNO  = f"{_FM};font-size:10px;color:#94a3b8;margin-left:auto;"
-
-# ════════════════════════════════════════════════════════════
-# PROFILES
-# ════════════════════════════════════════════════════════════
+/* Remove default triangle from <details> summary */
+details > summary { list-style: none; }
+details > summary::-webkit-details-marker { display: none; }
+</style>""", unsafe_allow_html=True)
+ 
+@st.cache_data
+def load_logo_b64():
+    for p in ["core/navbar.png","navbar.png","assets/navbar.png"]:
+        if os.path.exists(p):
+            return base64.b64encode(open(p,"rb").read()).decode()
+    return None
+ 
+LOGO = load_logo_b64()
+def logo_html(h=30):
+    if LOGO:
+        return f'<img src="data:image/png;base64,{LOGO}" style="height:{h}px;object-fit:contain;vertical-align:middle">'
+    return '<span style="font-size:16px;font-weight:800;color:#1e3a5f">🏗️ PLANNING SCOUT</span>'
+ 
+COLS = [
+    "Date Granted","Municipality","Full Address","Applicant",
+    "Permit Type","Declared Value PEM (€)","Est. Build Value (€)",
+    "Maps Link","Description","Source URL","PDF URL",
+    "Mode","Confidence","Date Found","Lead Score","Expediente","Phase",
+    "AI Evaluation","Supplies Needed",
+]
+ 
+@st.cache_data(ttl=300, show_spinner=False)
+def load_sheet():
+    try:
+        sid    = st.secrets.get("SHEET_ID","")
+        sa_raw = st.secrets.get("GCP_SERVICE_ACCOUNT_JSON","") or os.environ.get("GCP_SERVICE_ACCOUNT_JSON","")
+        if not sid or not sa_raw: return pd.DataFrame(columns=COLS)
+        creds = Credentials.from_service_account_info(
+            json.loads(sa_raw),
+            scopes=["https://www.googleapis.com/auth/spreadsheets",
+                    "https://www.googleapis.com/auth/drive"])
+        ws   = gspread.authorize(creds).open_by_key(sid).worksheet("Permits")
+        rows = ws.get_all_values()
+        if len(rows) < 2: return pd.DataFrame(columns=COLS)
+        data = [r + [""]*(max(0, len(COLS)-len(r))) for r in rows[1:]]
+        return pd.DataFrame(data, columns=COLS[:len(data[0])] if data else COLS)
+    except Exception as e:
+        st.error(f"Error al cargar datos: {e}"); return pd.DataFrame(columns=COLS)
+ 
 PROFILES = {
-    "🔧 Instaladores MEP": {
-        "key": "instaladores",
-        "tip": "💡 <strong>Contacta al promotor 6-12 meses antes</strong> de que empiece la obra — antes de que cierre los contratos de instalaciones. La licencia concedida es tu señal de arranque.",
-        "min_score": 0, "min_value": 80_000, "days": 30,
-        "types": ["obra mayor", "cambio de uso", "declaración responsable", "licencia primera ocupación", "urbanización"],
+    "instaladores": {
+        "icon":"🔧","label":"Instaladores MEP",
+        "desc":"Ascensores · HVAC · Climatización · PCI",
+        "types":["obra mayor nueva construcción","obra mayor rehabilitación",
+                 "declaración responsable obra mayor","licencia primera ocupación",
+                 "urbanización","demolición y nueva planta"],
+        "min_pem":80_000,"days":30,
+        "tip":"Un edificio plurifamiliar de 40 viviendas = 4 ascensores + HVAC completo + PCI. Contacta al promotor ANTES de que el constructor principal cierre contratos.",
+        "color":"#0369a1",
     },
-    "🏪 Expansión Retail": {
-        "key": "expansion",
-        "tip": "💡 <strong>Una urbanización aprobada = nuevo barrio en 2-3 años.</strong> Identifica la ubicación de tu próxima apertura antes de que suba el precio del suelo.",
-        "min_score": 0, "min_value": 0, "days": 60,
-        "types": ["urbanización", "plan especial", "plan parcial", "cambio de uso", "licencia de actividad", "obra mayor nueva construcción"],
+    "expansion": {
+        "icon":"🏪","label":"Expansión Retail",
+        "desc":"Nuevas aperturas · Ubicaciones · Cambios de uso",
+        "types":["urbanización","plan especial","plan especial / parcial",
+                 "cambio de uso","licencia de actividad"],
+        "min_pem":0,"days":60,
+        "tip":"Urbanización AD-10 Paracuellos = 2.500 viviendas → 10.000 residentes en 3 años. Encuentra tu próxima apertura antes de que el suelo suba de precio.",
+        "color":"#7c3aed",
     },
-    "📐 Promotores / RE": {
-        "key": "promotores",
-        "tip": "💡 <strong>Reparcelación aprobada = suelo urbanizable.</strong> Contacta a la Junta de Compensación antes de que la operación salga al mercado.",
-        "min_score": 20, "min_value": 300_000, "days": 60,
-        "types": ["urbanización", "plan parcial", "plan especial", "obra mayor nueva construcción", "cambio de uso"],
+    "promotores": {
+        "icon":"📐","label":"Promotores / RE",
+        "desc":"Reparcelaciones · Planes parciales · Convenios",
+        "types":["urbanización","plan especial / parcial","plan especial","cambio de uso"],
+        "min_pem":300_000,"days":60,
+        "tip":"Reparcelación aprobada = suelo urbanizable disponible. Contacta a la Junta de Compensación antes de que la operación salga al mercado.",
+        "color":"#0f766e",
     },
-    "🏢 Gran Constructora": {
-        "key": "constructora",
-        "tip": "💡 <strong>Aprobación definitiva = licitación en 12-18 meses.</strong> Prepara el dossier técnico y las alianzas antes que la competencia.",
-        "min_score": 35, "min_value": 2_000_000, "days": 90,
-        "types": ["urbanización", "plan especial", "plan parcial", "obra mayor industrial", "obra mayor nueva construcción"],
+    "constructora": {
+        "icon":"🏢","label":"Gran Constructora",
+        "desc":"Licitaciones · Urbanismo · Infraestructuras",
+        "types":["urbanización","licitación de obras","plan especial / parcial",
+                 "plan especial","obra mayor nueva construcción","obra mayor industrial"],
+        "min_pem":0,"days":90,   # 0 = show all type-matched leads; use score filter
+        "tip":"Aprobación definitiva de un plan = licitación en 12-18 meses. Prepara equipos técnicos, alianzas y ofertas antes que cualquier competidor.",
+        "color":"#1e3a5f",
     },
-    "🏭 Industrial / Log.": {
-        "key": "industrial",
-        "tip": "💡 <strong>Licencia de nave = obra en 3-6 meses.</strong> Contacta al promotor para demolición previa o ejecución completa.",
-        "min_score": 0, "min_value": 200_000, "days": 60,
-        "types": ["obra mayor industrial", "urbanización", "obra mayor nueva construcción", "cambio de uso"],
+    "fcc": {
+        "icon":"🏗️","label":"Gran Infra (FCC-style)",
+        "desc":"Urbanizaciones >€5M · Licitaciones · Obra civil",
+        "types":["urbanización","licitación de obras","plan especial / parcial","plan especial"],
+        "min_pem":0,"days":90,   # 0 = show all; use score≥40 to filter quality
+        "tip":"FCC busca proyectos a gran escala: Las Tablas Oeste €106M, Los Cerros Vicálvaro, Tres Cantos UE.5 €17M. Anticipación de 12-18 meses antes de licitación = ventaja competitiva.",
+        "color":"#1e3a5f",
     },
-    "🛒 Compras / Materiales": {
-        "key": "compras",
-        "tip": "💡 <strong>Todos los proyectos grandes = oportunidad de suministro.</strong> Preséntate antes de que la constructora adjudique materiales.",
-        "min_score": 0, "min_value": 150_000, "days": 30,
-        "types": [],
+    "industrial": {
+        "icon":"🏭","label":"Industrial / Log.",
+        "desc":"Naves · Polígonos · Centros de distribución",
+        "types":["obra mayor industrial","urbanización","licitación de obras","licencia de actividad"],
+        "min_pem":200_000,"days":60,
+        "tip":"Nave en polígono de Valdemoro = oportunidad logística. Detecta proyectos en el momento de concesión de licencia para ser el primero en llamar al promotor.",
+        "color":"#b45309",
     },
-    "🏙️ Vista General": {
-        "key": "general",
-        "tip": "Vista completa de todos los proyectos. Selecciona un perfil en el panel izquierdo para ver solo los leads relevantes para tu sector.",
-        "min_score": 0, "min_value": 0, "days": 14,
-        "types": [],
+    "kiloutou": {
+        "icon":"🚧","label":"Alquiler Maquinaria",
+        "desc":"Todos los proyectos — equipos de construcción y demolición",
+        "types":None,
+        "min_pem":200_000,"days":30,
+        "tip":"Llega al constructor ANTES de que empiece la obra. Cualquier proyecto grande = excavadoras, plataformas elevadoras, robots de demolición. Contacta al adjudicatario nada más ganar la licitación.",
+        "color":"#d97706",
+    },
+    "compras": {
+        "icon":"🛒","label":"Compras / Materiales",
+        "desc":"Acero · Hormigón · Fachadas · Instalaciones",
+        "types":None,"min_pem":150_000,"days":30,
+        "tip":"Todos los proyectos grandes son tu oportunidad. Preséntate antes de que el constructor adjudique suministros a tu competencia.",
+        "color":"#be185d",
+    },
+    "general": {
+        "icon":"🏙️","label":"Vista General",
+        "desc":"Todos los proyectos sin filtrar",
+        "types":None,"min_pem":0,"days":14,
+        "tip":"Vista completa de todo lo publicado en el BOCM esta semana para la Comunidad de Madrid.",
+        "color":"#374151",
     },
 }
-
-# ════════════════════════════════════════════════════════════
-# HELPERS
-# ════════════════════════════════════════════════════════════
-def esc(v):
-    """html.escape all data before inserting into HTML."""
-    s = str(v or "").strip()
-    return html_lib.escape(s) if s not in ("nan", "None", "—", "") else ""
-
-def parse_val(v):
-    if not v or str(v).strip() in ("", "—", "N/A", "nan"):
-        return 0.0
-    s = re.sub(r'[^\d,.]', '', str(v))
-    if s.count(',') == 1 and s.count('.') >= 1:
-        s = s.replace('.', '').replace(',', '.')
-    elif s.count(',') == 1:
-        s = s.replace(',', '.')
-    elif s.count('.') > 1:
-        s = s.replace('.', '')
+ 
+def pem_float(v):
+    if v is None or str(v).strip() in ("","0","nan"): return None
+    s = str(v).strip().replace("€","").replace(" ","")
     try:
-        return float(s)
-    except Exception:
-        return 0.0
-
-def parse_sc(v):
-    try:
-        return int(float(str(v).strip())) if str(v).strip() else 0
-    except Exception:
-        return 0
-
-def fmt(v):
-    if v == 0:    return "—"
-    if v >= 1e6:  return f"€{v/1e6:.1f}M"
-    if v >= 1000: return f"€{int(v/1000)}K"
-    return f"€{int(v):,}"
-
-def sc_pill(sc):
-    e = "🟢" if sc >= 65 else "🟠" if sc >= 40 else "🟡" if sc >= 20 else "⚪"
-    s = SSPG if sc >= 65 else SSPO if sc >= 40 else SSPN if sc >= 20 else SSPD
-    return f'<span style="{s}">{e} {sc} / 100</span>'
-
-def build_card(row):
-    """
-    Build one lead card with ONLY inline styles.
-    This guarantees correct rendering regardless of Streamlit's Markdown parser.
-    All data values are html.escape()'d to prevent broken HTML.
-    """
-    sc    = parse_sc(row.get("score_raw", 0))
-    pem   = parse_val(row.get("pem_raw", ""))
-    muni  = esc(row.get("municipio", "")) or "Madrid"
-    addr  = esc(row.get("direccion", ""))
-    prom  = esc(row.get("promotor", ""))
-    tipo  = esc(row.get("tipo", ""))
-    desc  = esc(row.get("descripcion", ""))
-    fecha = esc(row.get("fecha", ""))
-    fnd   = esc(row.get("fecha_encontrado", ""))
-    maps  = str(row.get("maps", "") or "").strip()
-    bocm  = str(row.get("bocm_url", "") or "").strip()
-    pdf   = str(row.get("pdf_url", "") or "").strip()
-    expd  = esc(row.get("expediente", ""))
-    conf  = str(row.get("confianza", "") or "").strip()
-
-    pem_s = fmt(pem)
-
-    # BOCM reference + date
-    ref_parts = []
-    if bocm:
-        m = re.search(r'BOCM[-_](\d{8})', bocm, re.I)
-        if m:
-            ref_parts.append(f"BOCM-{m.group(1)}")
-    pub = fnd[:10] if fnd else fecha
-    if pub:
-        try:
-            dt = datetime.strptime(pub, "%Y-%m-%d")
-            ref_parts.append(f"Publicado: {dt.strftime('%-d %b %Y')}")
-        except Exception:
-            ref_parts.append(pub)
-    ref_str = " · ".join(ref_parts)
-
-    # Title
-    title = addr if addr else (desc[:90] if desc else tipo)
-
-    # Status badge
-    tl = tipo.lower() + " " + desc.lower()
-    if "definitiv" in tl:
-        sbadge = f'<span style="{SSBG}">Aprobación definitiva</span>'
-    elif "inicial" in tl:
-        sbadge = f'<span style="{SSBA}">Aprobación inicial</span>'
-    elif "concede" in tl or "otorga" in tl:
-        sbadge = f'<span style="{SSBG}">Licencia concedida</span>'
-    elif tipo:
-        sbadge = f'<span style="{SSBN}">{tipo[:28]}</span>'
-    else:
-        sbadge = ""
-
-    # ─ HEADER (inline styles, guaranteed to render) ─
-    head = (
-        f'<div style="{SH}">'
-        f'  <div style="{SLO}">'
-        f'    <div style="{SDO}"></div>'
-        f'    <span style="{SMU}">{muni}</span>'
-        f'  </div>'
-        f'  <div style="{SBD}">{sbadge}{sc_pill(sc)}</div>'
-        f'</div>'
-    )
-
-    # ─ BODY ─
-    ref_html   = f'<div style="{SRF}">{ref_str}</div>' if ref_str else ""
-    title_html = f'<div style="{STI}">{title}</div>'
-    addr_html  = f'<div style="{SAD}"><span>📍</span><span>{addr}</span></div>' if addr and addr != title else ""
-
-    # ─ TABLE (inline styles on every element) ─
-    table_rows = []
-
-    # How many rows? Determine last one for no-border styling
-    all_row_data = []
-    if tipo:
-        all_row_data.append(("Tipo", f'<span style="{SVA}">{tipo}</span>'))
-    if pem > 0:
-        all_row_data.append(("PEM Total", f'<span style="{SVP}">{pem_s}</span>'))
-
-    # Etapas from description
-    etapa_m = re.findall(r'[Ee]tapa\s*(\d+)[^€\d]*?(\d[\d.,]+\s*(?:[MmKk€])?)', desc)
-    if etapa_m:
-        etags = "".join(f'<span style="{STA2}">Etapa {n}: {v}</span>' for n, v in etapa_m[:3])
-        all_row_data.append(("Etapas", f'<div style="{STG}">{etags}</div>'))
-
-    if prom:
-        all_row_data.append(("Promotor", f'<span style="{SVA}">{prom}</span>'))
-    if expd:
-        all_row_data.append(("Expediente", f'<span style="{SVA};{_FM};font-size:11px;">{expd}</span>'))
-    if conf in ("high", "medium", "low"):
-        cm = {"high": (STG2, "Alta"), "medium": (STA2, "Media"), "low": (STA2, "Baja")}
-        cs, ct = cm[conf]
-        all_row_data.append(("Fiabilidad", f'<span style="{cs}">{ct}</span>'))
-
-    for i, (key, val_html) in enumerate(all_row_data):
-        row_s = SRL if i == len(all_row_data) - 1 else SRB
-        table_rows.append(
-            f'<div style="{row_s}">'
-            f'<span style="{SKE}">{key}</span>'
-            f'{val_html}'
-            f'</div>'
-        )
-
-    table_html = (
-        f'<div style="{STA}">{"".join(table_rows)}</div>'
-        if table_rows else ""
-    )
-
-    # ─ FOOTER LINKS ─
-    links = []
-    if bocm:
-        links.append(f'<a href="{bocm}" target="_blank" rel="noopener" style="{SBP}">↗ Ver en el BOCM</a>')
-    if maps:
-        links.append(f'<a href="{maps}" target="_blank" rel="noopener" style="{SBT}">📍 Mapa</a>')
-    if pdf:
-        links.append(f'<a href="{pdf}" target="_blank" rel="noopener" style="{SBT}">📑 PDF</a>')
-    if prom:
-        q = html_lib.unescape(prom).replace(" ", "+")
-        links.append(f'<a href="https://www.linkedin.com/search/results/all/?keywords={html_lib.escape(q)}" target="_blank" rel="noopener" style="{SBT}">🔍 Promotor</a>')
-
-    footer = (
-        f'<div style="{SFO}">'
-        + "".join(links)
-        + f'<span style="{SNO}">Datos públicos · BOCM</span>'
-        + '</div>'
-    )
-
-    return (
-        f'<div style="{SC}">'
-        f'{head}'
-        f'<div style="{SBO}">'
-        f'{ref_html}'
-        f'{title_html}'
-        f'{addr_html}'
-        f'{table_html}'
-        f'</div>'
-        f'{footer}'
-        f'</div>'
-    )
-
-# ════════════════════════════════════════════════════════════
-# DATA LOADING
-# ════════════════════════════════════════════════════════════
-COL_MAP = {
-    "Date Granted": "fecha", "Municipality": "municipio",
-    "Full Address": "direccion", "Applicant": "promotor",
-    "Permit Type": "tipo", "Declared Value PEM (€)": "pem_raw",
-    "Est. Build Value (€)": "est_raw", "Maps Link": "maps",
-    "Description": "descripcion", "Source URL": "bocm_url",
-    "PDF URL": "pdf_url", "Mode": "modo", "Confidence": "confianza",
-    "Date Found": "fecha_encontrado", "Lead Score": "score_raw",
-    "Expediente": "expediente",
+        if "," in s and "." in s: s=s.replace(".","").replace(",",".")
+        elif "," in s: s=s.replace(",",".")
+        else: s=s.replace(".","")
+        f = float(s)
+        return f if 0 < f < 3_000_000_000 else None
+    except: return None
+ 
+def pem_str(v):
+    f = pem_float(v)
+    if f is None: return None
+    if f >= 1_000_000: return f"€{f/1_000_000:.1f}M"
+    if f >= 1_000:    return f"€{f/1_000:.0f}K"
+    return f"€{int(f)}"
+ 
+def parse_dt(s):
+    if not s: return None
+    for fmt in ["%Y-%m-%d","%Y-%m-%d %H:%M","%d/%m/%Y","%Y/%m/%d"]:
+        try: return datetime.strptime(str(s)[:16].strip(), fmt)
+        except: pass
+    return None
+ 
+def score_color(sc):
+    if sc >= 65: return "#16a34a"
+    if sc >= 40: return "#c8860a"
+    if sc >= 20: return "#1e3a5f"
+    return "#94a3b8"
+ 
+PHASE_MAP = {
+    "definitivo":        ("Aprobación definitiva","#dcfce7","#166534"),
+    "inicial":           ("Aprobación inicial",   "#fef9c3","#854d0e"),
+    "licitacion":        ("Licitación activa",    "#dbeafe","#1e40af"),
+    "primera_ocupacion": ("1ª Ocupación",         "#f3f4f6","#4b5563"),
+    "en_tramite":        ("En trámite",           "#f3f4f6","#6b7280"),
 }
-
-@st.cache_data(ttl=300)
-def load_data():
+TYPE_MAP = {
+    "urbanización":"Urbanización","plan especial / parcial":"Plan Parcial",
+    "plan especial":"Plan Especial","obra mayor nueva construcción":"Obra nueva",
+    "obra mayor industrial":"Industrial","obra mayor rehabilitación":"Rehabilitación",
+    "cambio de uso":"Cambio de uso","declaración responsable obra mayor":"Decl. Responsable",
+    "licencia primera ocupación":"1ª Ocupación","licencia de actividad":"Lic. Actividad",
+    "licitación de obras":"Licitación obras","demolición y nueva planta":"Demo + Nueva planta",
+    "obra mayor":"Obra mayor",
+}
+ 
+def is_nuevo(date_found_str):
+    dt = parse_dt(date_found_str)
+    if not dt: return False
+    return (datetime.now() - dt).total_seconds() < 48*3600
+ 
+def promotor_url(applicant):
+    if not applicant or len(applicant) < 3: return None
+    return f"https://www.linkedin.com/search/results/people/?keywords={urllib.parse.quote(applicant)}"
+ 
+def einforma_url(applicant):
+    if not applicant or len(applicant) < 3: return None
+    return f"https://www.einforma.com/busqueda/{urllib.parse.quote(applicant)}"
+ 
+def send_to_crm(lead_dict):
+    webhook = st.secrets.get("ZAPIER_WEBHOOK_URL","")
+    if not webhook: return False, "No ZAPIER_WEBHOOK_URL configured in secrets"
     try:
-        sa = dict(st.secrets["gcp_service_account"])
-        creds = Credentials.from_service_account_info(sa, scopes=[
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ])
-        gc = gspread.authorize(creds)
-        ws = gc.open_by_key(st.secrets.get("SHEET_ID", SHEET_ID)).worksheet("Permits")
-        data = ws.get_all_records()
-        return pd.DataFrame(data) if data else pd.DataFrame()
-    except Exception as ex:
-        st.error(f"Error conectando a Google Sheets: {ex}")
-        return pd.DataFrame()
-
-with st.spinner("Cargando proyectos…"):
-    df_raw = load_data()
-
-if df_raw.empty:
-    st.markdown(f"""
-    <div style="min-height:60vh;display:flex;align-items:center;justify-content:center;">
-    <div style="text-align:center;padding:48px 32px;background:#fff;border-radius:14px;
-         border:1.5px solid #e2e8f0;box-shadow:0 2px 8px rgba(0,0,0,.05);">
-      {LOGO_HTML}
-      <div style="font-size:40px;margin:20px 0 14px;">📡</div>
-      <h3 style="font-family:'Fraunces',Georgia,serif;font-size:20px;color:#0d1a2b;margin:0 0 8px;">Sin datos todavía</h3>
-      <p style="font-size:14px;color:#64748b;line-height:1.6;margin:0;">
-        El scraper no ha procesado proyectos aún.<br>
-        Ejecuta <strong>--weeks 8</strong> en GitHub Actions para el backfill inicial.
-      </p>
-    </div></div>""", unsafe_allow_html=True)
-    st.stop()
-
-df = df_raw.rename(columns={k: v for k, v in COL_MAP.items() if k in df_raw.columns})
-df["pem"]      = df["pem_raw"].apply(parse_val)  if "pem_raw"          in df.columns else pd.Series(0.0, index=df.index)
-df["score"]    = df["score_raw"].apply(parse_sc) if "score_raw"        in df.columns else pd.Series(0,   index=df.index)
-df["fecha_dt"] = pd.to_datetime(
-    df["fecha_encontrado"].str[:10], errors="coerce"
-) if "fecha_encontrado" in df.columns else pd.NaT
-
-all_munis = sorted([
-    m for m in (df["municipio"].dropna().unique().tolist() if "municipio" in df.columns else [])
-    if str(m).strip() and str(m) not in ("nan", "")
-])
-
-profile_names = list(PROFILES.keys())
-default_idx   = len(profile_names) - 1  # Vista General
-is_locked     = False
-
-if forced_profile_key:
-    matched     = next((n for n, p in PROFILES.items() if p["key"] == forced_profile_key), profile_names[-1])
-    default_idx = profile_names.index(matched)
-    is_locked   = True
-
+        r = http_requests.post(webhook, json=lead_dict, timeout=10)
+        return r.status_code < 300, f"Status {r.status_code}"
+    except Exception as e:
+        return False, str(e)
+ 
+def filter_data(df, prof_key, period_days, min_pem_val, min_score):
+    if df.empty: return df
+    prof   = PROFILES[prof_key]
+    cutoff = datetime.now() - timedelta(days=period_days)
+    df["_found_dt"] = df["Date Found"].apply(parse_dt)
+    df["_pem_f"]    = df["Declared Value PEM (€)"].apply(pem_float)
+    df["_score_i"]  = pd.to_numeric(df["Lead Score"], errors="coerce").fillna(0).astype(int)
+    mask = pd.Series([True]*len(df), index=df.index)
+    mask &= df["_found_dt"].apply(lambda d: d is not None and d >= cutoff)
+    if prof["types"]:
+        tl = [t.lower() for t in prof["types"]]
+        mask &= df["Permit Type"].apply(lambda x: str(x).lower().strip() in tl)
+    if min_pem_val > 0:
+        mask &= df["_pem_f"].apply(lambda v: v is not None and v >= min_pem_val)
+    if min_score > 0:
+        mask &= df["_score_i"] >= min_score
+    return df[mask].copy().sort_values("_score_i", ascending=False)
+ 
 # ════════════════════════════════════════════════════════════
-# SIDEBAR
+# RENDER CARD
+# ─ Card header (score, meta, tags, promotor, buttons) stays identical to v2
+# ─ Three collapsible sections INSIDE the card using HTML5 <details>/<summary>:
+#     📋 Descripción   — pulled from sheet column I ("Description")
+#     🤖 Análisis IA   — AI evaluation text
+#     ⚒️ Materiales    — supplies estimate
+# ─ All user text run through html_module.escape() — prevents HTML breaking
+#   on descriptions containing quotes, brackets, ampersands, etc.
 # ════════════════════════════════════════════════════════════
-with st.sidebar:
-
-    # Crisp logo — base64 embedded, no resizing blur
-    st.markdown(LOGO_HTML, unsafe_allow_html=True)
-    st.markdown('<div style="height:1px;background:#e2e8f0;margin:14px 0 16px;"></div>', unsafe_allow_html=True)
-
-    # Profile selector
-    st.markdown(
-        '<p style="font-family:\'JetBrains Mono\',monospace;font-size:10px;'
-        'color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;margin:0 0 10px;">Perfil</p>',
-        unsafe_allow_html=True
-    )
-
-    if is_locked:
-        st.markdown(f"""
-        <div style="background:#eff4fb;border:1.5px solid rgba(30,58,95,.2);border-radius:10px;
-             padding:10px 14px;font-size:13px;font-weight:600;color:#1e3a5f;margin-bottom:14px;
-             font-family:'Plus Jakarta Sans',system-ui,sans-serif;">
-          {profile_names[default_idx]}
-        </div>""", unsafe_allow_html=True)
-        selected_profile = profile_names[default_idx]
+def render_card(row, idx, profile_key):
+    score    = int(row.get("_score_i", 0) or 0)
+    muni     = (str(row.get("Municipality","")) or "Madrid").strip()
+    addr_raw = (str(row.get("Full Address","")) or "").strip()
+    appl_raw = (str(row.get("Applicant","")) or "").strip()
+    pt       = (str(row.get("Permit Type","")) or "").strip()
+    phase    = (str(row.get("Phase","")) or "").strip().lower()
+    date_g   = (str(row.get("Date Granted","")) or "").strip()
+    date_f   = (str(row.get("Date Found","")) or "").strip()
+    exp_raw  = (str(row.get("Expediente","")) or "").strip()
+    conf_raw = (str(row.get("Confidence","")) or "").strip()
+    bocm_url = (str(row.get("Source URL","")) or "").strip()
+    pdf_url  = (str(row.get("PDF URL","")) or "").strip()
+    maps_url = (str(row.get("Maps Link","")) or "").strip()
+    desc_raw = (str(row.get("Description","")) or "").strip()
+    ai_raw   = (str(row.get("AI Evaluation","")) or "").strip()
+    sup_raw  = (str(row.get("Supplies Needed","")) or "").strip()
+    pem_raw  = row.get("_pem_f")
+ 
+    # ── Escape all user text (prevents HTML breaking on quotes/brackets) ────
+    def e(s):
+        v = s.strip() if s else ""
+        return "" if v.lower() == "nan" else html_module.escape(v)
+ 
+    muni_e  = e(muni)
+    appl    = e(appl_raw)
+    addr    = e(addr_raw)
+    exp     = e(exp_raw)
+    conf    = e(conf_raw)
+    desc    = e(desc_raw)
+    ai_eval = e(ai_raw)
+    supplies= e(sup_raw)
+ 
+    # ── Derived ──────────────────────────────────────────────
+    sc_color  = score_color(score)
+    nuevo     = is_nuevo(date_f)
+    pem_label = pem_str(pem_raw) if pem_raw else None
+ 
+    dg_dt  = parse_dt(date_g)
+    dg_str = dg_dt.strftime("%-d %b %Y") if dg_dt else (date_g[:10] if date_g else "")
+    df_dt  = parse_dt(date_f)
+    df_str = ""
+    if df_dt:
+        delta = datetime.now() - df_dt
+        df_str = "Hoy" if delta.days==0 else ("Ayer" if delta.days==1 else f"Hace {delta.days}d")
+ 
+    bocm_id = ""
+    m = re.search(r"BOCM-\d{8}-\d+", bocm_url, re.I)
+    if m: bocm_id = m.group(0)
+ 
+    ph_label, ph_bg, ph_fg = PHASE_MAP.get(phase, ("","#f3f4f6","#6b7280"))
+    type_label = TYPE_MAP.get(pt.lower(), pt.title() if pt else "")
+ 
+    # Title (from description, cleaned)
+    if desc_raw and len(desc_raw) > 12:
+        t = re.sub(r"^(?:aprobación definitiva[:\s]+|se concede[:\s]+|se otorga[:\s]+|se aprueba[:\s]+)",
+                   "", desc_raw, flags=re.I)
+        t = (t[0].upper() + t[1:]) if t else desc_raw
+        title = html_module.escape(t[:95] + ("…" if len(t) > 95 else ""))
     else:
-        selected_profile = st.radio(
-            "Perfil",
-            profile_names,
-            index=default_idx,
-            label_visibility="collapsed",
-        )
-
-    prof = PROFILES[selected_profile]
-
-    st.markdown('<div style="height:1px;background:#e2e8f0;margin:14px 0 16px;"></div>', unsafe_allow_html=True)
-    st.markdown(
-        '<p style="font-family:\'JetBrains Mono\',monospace;font-size:10px;'
-        'color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;margin:0 0 12px;">Filtros</p>',
-        unsafe_allow_html=True
-    )
-
-    days_back = st.selectbox(
-        "Período",
-        [7, 14, 30, 60, 90],
-        index=[7, 14, 30, 60, 90].index(prof["days"]) if prof["days"] in [7, 14, 30, 60, 90] else 1,
-        format_func=lambda x: f"Últimos {x} días",
-    )
-    min_pem   = st.number_input("PEM mínimo (€)", value=prof["min_value"], min_value=0, step=50_000, format="%d")
-    min_score = st.slider("Puntuación mínima", 0, 100, value=prof["min_score"], step=5)
-    muni_sel  = st.multiselect("Municipio", options=all_munis, placeholder="Todos")
-
-    st.markdown('<div style="height:1px;background:#e2e8f0;margin:14px 0 16px;"></div>', unsafe_allow_html=True)
-
-    if st.button("🔄 Actualizar datos"):
-        st.cache_data.clear()
-        st.rerun()
-
-    if not is_locked:
-        with st.expander("🔗 Compartir con cliente"):
-            pk = prof["key"]
-            st.code(f"planningscout.streamlit.app?perfil={pk}", language=None)
-            st.caption("El cliente abre este enlace en su navegador — sin cuenta, sin login.")
-
-    # Last update info
-    last_dt  = df["fecha_dt"].max() if "fecha_dt" in df.columns else None
-    last_str = last_dt.strftime("%d %b %Y") if pd.notna(last_dt) else "—"
-    st.markdown(f"""
-    <div style="margin-top:16px;padding:12px 14px;background:#f7f8fa;border-radius:8px;border:1px solid #e2e8f0;">
-      <p style="font-family:'JetBrains Mono',monospace;font-size:9.5px;color:#94a3b8;
-         text-transform:uppercase;letter-spacing:.07em;margin:0 0 3px;">Última actualización</p>
-      <p style="font-size:13px;font-weight:600;color:#334155;margin:0;">{last_str}</p>
-      <p style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#94a3b8;margin:4px 0 0;">
-        BOCM · Comunidad de Madrid</p>
-    </div>""", unsafe_allow_html=True)
-
-# ════════════════════════════════════════════════════════════
-# MAIN CONTENT
-# ════════════════════════════════════════════════════════════
-emoji_part = selected_profile.split()[0]
-name_part  = " ".join(selected_profile.split()[1:])
-
-st.markdown(f"""
-<div style="margin-bottom:24px;padding-bottom:18px;border-bottom:1px solid #e2e8f0;">
-  <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
-    <span style="font-size:24px;">{emoji_part}</span>
-    <h1 style="font-family:'Fraunces',Georgia,serif;font-size:26px;font-weight:700;
-         color:#0d1a2b;margin:0;line-height:1.2;">{name_part}</h1>
+        parts = [TYPE_MAP.get(pt.lower(), pt.title() if pt else "")]
+        if addr: parts.append(addr[:45])
+        elif muni != "Madrid": parts.append(muni_e)
+        title = " · ".join(p for p in parts if p)
+ 
+    # ── Score circle ────────────────────────────────────────
+    score_html = (
+        f'<div style="min-width:54px;width:54px;height:54px;border-radius:50%;'
+        f'background:{sc_color};display:flex;flex-direction:column;align-items:center;'
+        f'justify-content:center;flex-shrink:0;color:white;font-weight:700;">'
+        f'<span style="font-size:15px;line-height:1">{score}</span>'
+        f'<span style="font-size:9px;font-weight:400;opacity:.85">pts</span></div>')
+ 
+    nuevo_html = ""
+    if nuevo:
+        nuevo_html = ('<span style="background:#fef08a;color:#713f12;border-radius:20px;'
+                      'padding:2px 10px;font-size:11px;font-weight:700;margin-left:8px;">'
+                      '⚡ NUEVO</span>')
+ 
+    meta_parts = []
+    if bocm_id:  meta_parts.append(f'<span style="color:#94a3b8">{bocm_id}</span>')
+    meta_parts.append(f'<strong style="color:#374151">{muni_e}</strong>')
+    if dg_str:   meta_parts.append(f'<span style="color:#94a3b8">{dg_str}</span>')
+    if df_str:   meta_parts.append(f'<span style="color:#94a3b8;font-style:italic">Detectado: {df_str}</span>')
+    meta_html = ' <span style="color:#e2e8f0">·</span> '.join(meta_parts)
+ 
+    tags_html = ""
+    if type_label:
+        tags_html += (f'<span style="background:#f1f5f9;color:#334155;border-radius:20px;'
+                      f'padding:3px 12px;font-size:12px;font-weight:600;margin-right:6px;">{type_label}</span>')
+    if ph_label:
+        tags_html += (f'<span style="background:{ph_bg};color:{ph_fg};border-radius:20px;'
+                      f'padding:3px 12px;font-size:12px;font-weight:600;margin-right:6px;">{ph_label}</span>')
+    if pem_label:
+        tags_html += (f'<span style="background:#fef3c7;color:#92400e;border-radius:20px;'
+                      f'padding:3px 12px;font-size:13px;font-weight:700;margin-right:6px;">{pem_label} PEM</span>')
+ 
+    det_parts = []
+    if appl: det_parts.append(f'<strong>Promotor:</strong> {appl[:60]}')
+    if exp:  det_parts.append(f'<strong>Expediente:</strong> {exp}')
+    if conf: det_parts.append(f'<strong>Fiabilidad:</strong> {conf.capitalize()}')
+    if addr: det_parts.append(f'<strong>Dirección:</strong> {addr[:50]}')
+    det_html = ""
+    if det_parts:
+        det_html = (f'<div style="font-size:12px;color:#6b7280;margin:10px 0 4px 0;line-height:1.7;">'
+                    + " &nbsp;·&nbsp; ".join(det_parts) + "</div>")
+ 
+    btn_s = ("display:inline-block;padding:7px 14px;border-radius:8px;font-size:12px;"
+             "font-weight:600;text-decoration:none;margin-right:6px;margin-top:6px;cursor:pointer;")
+    btns = []
+    if bocm_url:
+        btns.append(f'<a href="{bocm_url}" target="_blank" style="{btn_s}background:#1e3a5f;color:white;border:1.5px solid #1e3a5f;">↗ Ver BOCM</a>')
+    if maps_url:
+        btns.append(f'<a href="{maps_url}" target="_blank" style="{btn_s}background:white;color:#1e3a5f;border:1.5px solid #bfdbfe;">📍 Mapa</a>')
+    if pdf_url and pdf_url != bocm_url:
+        btns.append(f'<a href="{pdf_url}" target="_blank" style="{btn_s}background:white;color:#dc2626;border:1.5px solid #fca5a5;">📄 PDF</a>')
+    if appl_raw:
+        li_url = promotor_url(appl_raw)
+        ei_url = einforma_url(appl_raw)
+        if li_url:
+            btns.append(f'<a href="{li_url}" target="_blank" style="{btn_s}background:white;color:#0a66c2;border:1.5px solid #bfdbfe;">🔍 LinkedIn</a>')
+        if ei_url:
+            btns.append(f'<a href="{ei_url}" target="_blank" style="{btn_s}background:white;color:#374151;border:1.5px solid #e2e8f0;">📊 Einforma</a>')
+    btns_html = f'<div style="margin-top:12px;">{"".join(btns)}</div>' if btns else ""
+ 
+    # ────────────────────────────────────────────────────────
+    # Shared summary row style (same for all 3 dropdowns)
+    # ────────────────────────────────────────────────────────
+    SUM = ("cursor:pointer;padding:10px 22px;font-size:12.5px;font-weight:600;"
+           "color:#374151;display:flex;align-items:center;gap:8px;"
+           "outline:none;user-select:none;-webkit-user-select:none;list-style:none;"
+           "border-top:1px solid #f1f5f9;")
+    DIV = "padding:2px 22px 16px 22px;"
+ 
+    # ── 📋 DESCRIPTION (sheet column I) ─────────────────────
+    # Always shown as a dropdown — text pulled directly from "Description" column.
+    # html_module.escape() ensures special characters never break the HTML.
+    if desc:
+        preview = desc[:110] + ("…" if len(desc) > 110 else "")
+        desc_block = f"""
+<details>
+  <summary style="{SUM}">
+    <span style="font-size:14px">📋</span>
+    <span>Descripción</span>
+    <span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:12px;color:#94a3b8;font-weight:400;margin-left:4px;">{preview}</span>
+    <span style="font-size:10px;color:#94a3b8;font-weight:400;flex-shrink:0;margin-left:8px;">▼ ver más</span>
+  </summary>
+  <div style="{DIV}">
+    <div style="font-size:13px;color:#374151;line-height:1.7;background:#f8fafc;border-radius:10px;padding:14px 16px;">{desc}</div>
   </div>
-  <p style="font-size:13px;color:#64748b;margin:0;font-family:'Plus Jakarta Sans',system-ui,sans-serif;">
-    Últimos {days_back} días &nbsp;·&nbsp; Proyectos detectados del BOCM (Comunidad de Madrid)
-  </p>
-</div>""", unsafe_allow_html=True)
-
-# ── Filter data ──
-cutoff = datetime.now() - timedelta(days=days_back)
-df_f   = df[df["fecha_dt"] >= cutoff].copy() if "fecha_dt" in df.columns else df.copy()
-
-if min_score > 0:
-    df_f = df_f[(df_f["score"] >= min_score) | (df_f["score"] == 0)]
-df_f = df_f[df_f["pem"] >= min_pem]
-
-if prof["types"] and "tipo" in df_f.columns:
-    pat  = "|".join(re.escape(t) for t in prof["types"])
-    df_f = df_f[df_f["tipo"].str.contains(pat, case=False, na=False)]
-
-if muni_sel and "municipio" in df_f.columns:
-    df_f = df_f[df_f["municipio"].isin(muni_sel)]
-
-df_f = df_f.sort_values(["score", "pem"], ascending=[False, False]).reset_index(drop=True)
-
-# ── Metrics ──
-total_pem  = df_f["pem"].sum()
-count      = len(df_f)
-high_leads = len(df_f[df_f["score"] >= 65])
-avg_score  = int(df_f["score"].mean()) if count > 0 else 0
-
-c1, c2, c3, c4 = st.columns(4)
-for col, (val, lbl, clr) in zip(
-    [c1, c2, c3, c4],
-    [
-        (str(count),         "Proyectos",      "#1e3a5f"),
-        (fmt(total_pem),     "PEM total",       "#1e3a5f"),
-        (str(high_leads),    "🟢 Prioritarios", "#16a34a"),
-        (f"{avg_score} pts", "Score medio",     "#5a5a78"),
-    ]
-):
-    with col:
-        st.markdown(f"""
-        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;
-             padding:16px 20px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04);">
-          <span style="font-family:'Fraunces',Georgia,serif;font-size:26px;font-weight:700;
-                color:{clr};line-height:1;display:block;margin-bottom:5px;">{val}</span>
-          <span style="font-family:'JetBrains Mono',monospace;font-size:9.5px;
-                color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;">{lbl}</span>
-        </div>""", unsafe_allow_html=True)
-
-# ── Tip ──
-st.markdown(
-    f'<div style="background:#fffbeb;border-left:3px solid #c8860a;border-radius:0 8px 8px 0;'
-    f'padding:12px 16px;font-size:13px;color:#64748b;line-height:1.6;margin:18px 0;'
-    f'font-family:\'Plus Jakarta Sans\',system-ui,sans-serif;">{prof["tip"]}</div>',
-    unsafe_allow_html=True
-)
-
-# ── Export ──
-if not df_f.empty:
-    exp_cols = [c for c in ["fecha","municipio","direccion","promotor","tipo","pem_raw","descripcion","expediente","bocm_url"] if c in df_f.columns]
-    csv = df_f[exp_cols].to_csv(index=False).encode("utf-8")
-    col_dl, _ = st.columns([1, 3])
-    with col_dl:
-        st.download_button(
-            f"⬇️ Exportar {count} leads CSV",
-            data=csv,
-            file_name=f"planningscout_{prof['key']}_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-        )
-
-st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-
-# ── Leads ──
-if df_f.empty:
-    st.markdown(f"""
-    <div style="text-align:center;padding:56px 24px;background:#fff;
-         border:1.5px solid #e2e8f0;border-radius:14px;
-         font-family:'Plus Jakarta Sans',system-ui,sans-serif;">
-      <div style="font-size:40px;">🔍</div>
-      <h3 style="font-family:'Fraunces',Georgia,serif;font-size:19px;
-          color:#0d1a2b;margin:14px 0 8px;">Sin proyectos con estos filtros</h3>
-      <p style="font-size:13px;color:#64748b;line-height:1.6;margin:0;">
-        Amplía el período (ahora: {days_back} días),<br>
-        reduce el PEM mínimo ({fmt(min_pem)}),<br>
-        o cambia el perfil en el panel izquierdo.
-      </p>
-    </div>""", unsafe_allow_html=True)
-else:
-    st.markdown(
-        f'<div style="display:flex;align-items:center;justify-content:space-between;'
-        f'margin:0 0 14px;padding-bottom:12px;border-bottom:1px solid #e2e8f0;">'
-        f'<h2 style="font-family:\'Fraunces\',Georgia,serif;font-size:19px;font-weight:700;'
-        f'color:#0d1a2b;margin:0;">Proyectos detectados</h2>'
-        f'<span style="font-family:\'JetBrains Mono\',monospace;font-size:11px;'
-        f'background:#1e3a5f;color:#fff;padding:4px 12px;border-radius:100px;">'
-        f'{count} resultado{"s" if count != 1 else ""}</span>'
-        f'</div>',
-        unsafe_allow_html=True
-    )
-
-    for _, row in df_f.iterrows():
-        st.markdown(build_card(row.to_dict()), unsafe_allow_html=True)
-
-# ── Footer ──
-st.markdown(f"""
-<div style="text-align:center;padding:28px 0 8px;margin-top:28px;border-top:1px solid #e2e8f0;
-     font-family:'JetBrains Mono',monospace;font-size:10px;color:#94a3b8;line-height:1.9;">
-  <strong style="color:#5a5a78;font-size:11px;">PlanningScout Madrid</strong><br>
-  Datos del BOCM (Boletín Oficial de la Comunidad de Madrid) · Registros públicos oficiales<br>
-  PEM = Presupuesto de Ejecución Material · {count} proyectos · {last_str}
+</details>"""
+    else:
+        desc_block = f"""
+<details>
+  <summary style="{SUM}color:#9ca3af;">
+    <span style="font-size:14px">📋</span>
+    <span>Descripción</span>
+    <span style="margin-left:auto;font-size:11px;color:#d1d5db;font-weight:400;">sin datos</span>
+  </summary>
+  <div style="{DIV}"><div style="font-size:12px;color:#9ca3af;">Sin descripción disponible para este lead.</div></div>
+</details>"""
+ 
+    # ── 🤖 AI EVALUATION ─────────────────────────────────────
+    if ai_eval and len(ai_eval) > 10:
+        ai_block = f"""
+<details>
+  <summary style="{SUM}">
+    <span style="font-size:14px">🤖</span>
+    <span>Análisis IA</span>
+    <span style="margin-left:auto;font-size:10px;font-weight:600;background:#dbeafe;color:#1e40af;border-radius:20px;padding:2px 8px;flex-shrink:0;">IA</span>
+  </summary>
+  <div style="{DIV}">
+    <div style="background:#eff6ff;border-radius:10px;padding:14px 16px;">
+      <div style="font-size:11px;font-weight:700;color:#1d4ed8;letter-spacing:.05em;margin-bottom:8px;">🤖 ANÁLISIS IA</div>
+      <div style="font-size:13px;color:#1e3a5f;line-height:1.65;">{ai_eval[:500]}</div>
+    </div>
+  </div>
+</details>"""
+    else:
+        ai_block = f"""
+<details>
+  <summary style="{SUM}color:#9ca3af;">
+    <span style="font-size:14px">🤖</span>
+    <span>Análisis IA</span>
+    <span style="margin-left:auto;font-size:11px;color:#d1d5db;font-weight:400;">disponible próxima actualización</span>
+  </summary>
+  <div style="{DIV}"><div style="font-size:12px;color:#9ca3af;">El análisis IA se genera en la próxima ejecución del motor con la clave OpenAI configurada.</div></div>
+</details>"""
+ 
+    # ── ⚒️ SUPPLIES ──────────────────────────────────────────
+    if supplies and len(supplies) > 10:
+        sup_content = f'<div style="font-size:12.5px;color:#166534;line-height:1.8;">{supplies[:300]}</div>'
+    else:
+        pt_l = pt.lower(); d_l = desc_raw.lower()
+        est = []
+        if "urbanización" in pt_l or "urbaniz" in d_l:
+            est = ["🔧 Redes eléctrica BT/MT, alumbrado público, centros de transformación",
+                   "🛒 Hormigón HA-25, tuberías PVC DN200-500, áridos, bordillos",
+                   "🚧 Excavadoras, compactadores, hormigoneras, dúmpers"]
+        elif "nueva construcción" in pt_l or "plurifamiliar" in d_l:
+            est = ["🔧 Ascensores (1 por 6-8 viv), HVAC centralizado, PCI completo",
+                   "🛒 Acero ~50kg/m², hormigón HA-25/HA-30, carpintería y vidriería",
+                   "🚧 Grúa torre, andamios de fachada, plataformas elevadoras"]
+        elif "industrial" in pt_l or "nave" in d_l:
+            est = ["🔧 Instalación eléctrica MT/BT, climatización industrial, PCI",
+                   "🛒 Perfil metálico, panel sándwich, solera HA-25",
+                   "🚧 Grúas, robots de demolición, maquinaria de explanación"]
+        elif "rehabilitación" in pt_l or "reforma" in pt_l:
+            est = ["🔧 Sustitución de instalaciones (eléctrica, fontanería, HVAC)",
+                   "🛒 Aislamiento, carpintería, revestimientos, impermeabilización",
+                   "🚧 Andamios de fachada, plataformas tijera, miniexcavadoras"]
+        elif "licitación" in pt_l:
+            pem_s = pem_str(pem_raw) or "N/D"
+            est = [f"🏗️ Licitación {pem_s} — adjudicatario necesitará equipos",
+                   "🚧 Coordinar con constructor ganador para alquiler de maquinaria",
+                   "🛒 Acordar precios de suministros antes del inicio de obra"]
+        if est:
+            rows_html = "".join(f'<div style="padding:2px 0;font-size:12.5px;">{html_module.escape(l)}</div>' for l in est)
+            sup_content = f'<div style="color:#166534;line-height:1.8;">{rows_html}</div>'
+            sup_note = '<div style="font-size:10.5px;color:#86efac;margin-top:8px;">* estimación base por tipo de proyecto</div>'
+        else:
+            sup_content = '<div style="font-size:12px;color:#9ca3af;">Estimación disponible tras próxima actualización.</div>'
+            sup_note = ""
+ 
+    if supplies and len(supplies) > 10:
+        sup_note = ""
+    else:
+        if not est:
+            sup_note = ""
+ 
+    sup_block = f"""
+<details>
+  <summary style="{SUM}">
+    <span style="font-size:14px">⚒️</span>
+    <span>Materiales y equipos estimados</span>
+    <span style="margin-left:auto;font-size:10px;font-weight:600;background:#dcfce7;color:#166534;border-radius:20px;padding:2px 8px;flex-shrink:0;">{"IA" if (supplies and len(supplies)>10) else "base"}</span>
+  </summary>
+  <div style="{DIV}">
+    <div style="background:#f0fdf4;border-radius:10px;padding:14px 16px;">
+      <div style="font-size:11px;font-weight:700;color:#15803d;letter-spacing:.05em;margin-bottom:8px;">⚒️ ESTIMACIÓN DE MATERIALES Y SERVICIOS</div>
+      {sup_content}
+      {sup_note if 'sup_note' in dir() else ""}
+    </div>
+  </div>
+</details>"""
+ 
+    # ── Assemble ─────────────────────────────────────────────
+    return f"""
+<div style="background:white;border-radius:16px;margin-bottom:16px;
+            border:1px solid #e2e8f0;box-shadow:0 2px 8px rgba(0,0,0,.06);overflow:hidden;">
+  <div style="padding:18px 22px 14px 22px;">
+    <div style="display:flex;gap:16px;align-items:flex-start;">
+      {score_html}
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12px;margin-bottom:5px;">{meta_html}{nuevo_html}</div>
+        <div style="font-size:17px;font-weight:700;color:#111827;line-height:1.35;margin:4px 0 10px 0;">{title}</div>
+        <div style="margin-bottom:4px;">{tags_html}</div>
+        {det_html}
+        {btns_html}
+      </div>
+    </div>
+  </div>
+  {desc_block}
+  {ai_block}
+  {sup_block}
 </div>
-""", unsafe_allow_html=True)
+"""
+ 
+def check_access():
+    if str(st.secrets.get("REQUIRE_TOKEN","false")).lower() != "true": return True
+    token = st.query_params.get("token","")
+    try:
+        tokens = dict(st.secrets.get("client_tokens",{}))
+        if token in tokens or token in tokens.values(): return True
+    except: pass
+    st.error("🔒 Acceso restringido. Solicita tu enlace a PlanningScout.")
+    st.stop()
+ 
+check_access()
+ 
+with st.sidebar:
+    st.markdown(
+        f'<div style="text-align:center;padding:16px 8px 14px;border-bottom:1px solid #f1f5f9;margin-bottom:12px;">'
+        f'{logo_html(32)}<div style="font-size:12px;font-weight:800;color:#1e3a5f;letter-spacing:.08em;margin-top:6px;">PLANNING SCOUT</div></div>',
+        unsafe_allow_html=True)
+ 
+    st.markdown('<p style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:.12em;margin:14px 0 6px 0;">PERFIL</p>',unsafe_allow_html=True)
+    profile_key = st.radio("perfil_radio",list(PROFILES.keys()),
+                           format_func=lambda k: f"{PROFILES[k]['icon']} {PROFILES[k]['label']}",
+                           label_visibility="collapsed",key="profile_sel")
+    prof = PROFILES[profile_key]
+    st.markdown(f'<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12px;color:#78350f;margin:8px 0 16px 0;line-height:1.5;">💡 {prof["tip"]}</div>',unsafe_allow_html=True)
+ 
+    if profile_key == "fcc":
+        st.info("🏗️ **Perfil FCC** — URL directa: `?perfil=fcc`")
+    if profile_key == "kiloutou":
+        st.info("🚧 **Kiloutou** — Todos los proyectos >€200K. Llega antes de que empiece la obra.")
+ 
+    st.markdown('<p style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:.12em;margin:6px 0 6px 0;">FILTROS</p>',unsafe_allow_html=True)
+    period_opts = {"7 días":7,"14 días":14,"30 días":30,"60 días":60,"90 días":90}
+    default_idx = min(range(len(period_opts)),key=lambda i: abs(list(period_opts.values())[i]-prof["days"]))
+    period_label = st.selectbox("Período",list(period_opts.keys()),index=default_idx,key="period_box")
+    period_days  = period_opts[period_label]
+    min_pem_val  = st.number_input("PEM mínimo (€)",value=prof["min_pem"],step=50_000,min_value=0,key="pem_num")
+    # Default min score depends on profile
+    default_score = 40 if profile_key in ("constructora","fcc") else 0
+    min_score    = st.slider("Puntuación mínima",0,100,default_score,5,key="score_sl")
+ 
+    st.markdown('<p style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:.12em;margin:14px 0 6px 0;">CRM</p>',unsafe_allow_html=True)
+    crm_url = st.secrets.get("ZAPIER_WEBHOOK_URL","")
+    if crm_url: st.success("✅ CRM conectado (Zapier/Make)")
+    else: st.info("Añade ZAPIER_WEBHOOK_URL en secrets para activar CRM")
+ 
+    st.markdown('<p style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:.12em;margin:14px 0 6px 0;">DATOS</p>',unsafe_allow_html=True)
+    if st.button("🔄 Actualizar",use_container_width=True,key="refresh"):
+        st.cache_data.clear(); st.rerun()
+    st.markdown('<div style="font-size:10px;color:#cbd5e1;margin-top:10px;text-align:center;">Datos: BOCM oficial · 179 municipios CM<br>Actualización diaria</div>',unsafe_allow_html=True)
+ 
+url_perfil = st.query_params.get("perfil","")
+if url_perfil and url_perfil in PROFILES:
+    st.session_state["profile_sel"] = url_perfil
+ 
+with st.spinner("Cargando datos del BOCM…"):
+    df_raw = load_sheet()
+ 
+if df_raw.empty:
+    st.markdown('<div style="background:white;border-radius:16px;padding:48px;text-align:center;border:1px dashed #d1d5db;margin-top:20px;"><div style="font-size:36px;margin-bottom:12px;">📡</div><div style="font-size:18px;font-weight:700;color:#374151;">Sin datos disponibles</div><div style="font-size:13px;color:#9ca3af;margin-top:8px;">Configura GCP_SERVICE_ACCOUNT_JSON y SHEET_ID en secrets.</div></div>',unsafe_allow_html=True)
+    st.stop()
+ 
+df = filter_data(df_raw.copy(), profile_key, period_days, min_pem_val, min_score)
+ 
+total_pem   = df["_pem_f"].sum()
+priority    = int((df["_score_i"] >= 65).sum())
+new_48h     = int(df["Date Found"].apply(is_nuevo).sum())
+pem_display = (f"€{total_pem/1_000_000:.1f}M" if total_pem >= 1_000_000 else f"€{int(total_pem):,}" if total_pem > 0 else "N/D")
+top_score   = int(df["_score_i"].max()) if len(df) else 0
+ 
+st.markdown(
+    f'<div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:16px;border-bottom:1px solid #e2e8f0;margin-bottom:20px;">'
+    f'<div style="display:flex;align-items:center;gap:10px;">'
+    f'<span style="display:inline-block;width:8px;height:8px;background:#22c55e;border-radius:50%;"></span>'
+    f'<span style="font-size:12px;color:#6b7280;">EN DIRECTO · 179 municipios CM Madrid · Leads diarios</span>'
+    f'</div><div>{logo_html(28)}</div></div>',unsafe_allow_html=True)
+ 
+c1,c2,c3,c4,c5 = st.columns(5)
+for col,num,label,color in [(c1,len(df),"Proyectos","#1e3a5f"),(c2,pem_display,"PEM total","#c8860a"),(c3,priority,"🟢 Prioritarios","#16a34a"),(c4,f"{top_score} pts","Score más alto","#374151"),(c5,f"⚡ {new_48h}","Últimas 48h","#d97706")]:
+    col.markdown(f'<div style="background:white;border-radius:12px;padding:14px 16px;border:1px solid #e2e8f0;box-shadow:0 1px 3px rgba(0,0,0,.05);"><div style="font-size:26px;font-weight:800;color:{color};">{num}</div><div style="font-size:12px;color:#6b7280;margin-top:2px;">{label}</div></div>',unsafe_allow_html=True)
+ 
+st.markdown("<div style='height:20px'></div>",unsafe_allow_html=True)
+munis_uniq   = [m for m in df["Municipality"].dropna().unique().tolist()[:5] if m]
+muni_preview = " · ".join(munis_uniq) + ("…" if len(df["Municipality"].unique()) > 5 else "")
+hcol,ecol    = st.columns([3,1])
+with hcol:
+    st.markdown(f'<div style="font-size:22px;font-weight:800;color:#111827;margin-bottom:2px;">Tus leads — {len(df)} proyectos</div><div style="font-size:13px;color:#9ca3af;margin-bottom:16px;">{muni_preview}</div>',unsafe_allow_html=True)
+with ecol:
+    if len(df):
+        csv = df.drop(columns=[c for c in df.columns if c.startswith("_")],errors="ignore").to_csv(index=False).encode("utf-8")
+        st.download_button(f"⬇️ Exportar CSV",csv,f"planningscout_{profile_key}_{datetime.now().strftime('%Y%m%d')}.csv","text/csv",use_container_width=True,key="csv_dl")
+ 
+if df.empty:
+    st.markdown('<div style="background:white;border-radius:16px;padding:48px;text-align:center;border:1px dashed #d1d5db;"><div style="font-size:32px;margin-bottom:12px;">🔍</div><div style="font-size:17px;font-weight:700;color:#374151;">Sin resultados</div><div style="font-size:13px;color:#9ca3af;margin-top:8px;">Amplía el período o reduce el PEM mínimo.</div></div>',unsafe_allow_html=True)
+else:
+    for i,(_, row) in enumerate(df.iterrows()):
+        st.markdown(render_card(row, i, profile_key), unsafe_allow_html=True)
+ 
+        crm_webhook = st.secrets.get("ZAPIER_WEBHOOK_URL","")
+        if crm_webhook:
+            lead_id = str(row.get("Source URL",""))[-20:].replace("/","_")
+            btn_key = f"crm_{i}_{lead_id}"
+            if st.button("📤 Enviar a CRM", key=btn_key, type="secondary"):
+                lead_data = {
+                    "municipality":str(row.get("Municipality","")),
+                    "permit_type": str(row.get("Permit Type","")),
+                    "applicant":   str(row.get("Applicant","")),
+                    "pem_eur":     float(row.get("_pem_f") or 0),
+                    "description": str(row.get("Description",""))[:300],
+                    "ai_evaluation":str(row.get("AI Evaluation",""))[:400],
+                    "supplies":    str(row.get("Supplies Needed",""))[:200],
+                    "source_url":  str(row.get("Source URL","")),
+                    "lead_score":  int(row.get("_score_i",0)),
+                    "phase":       str(row.get("Phase","")),
+                    "date_granted":str(row.get("Date Granted","")),
+                    "profile":     profile_key,
+                    "sent_at":     datetime.now().isoformat(),
+                }
+                ok, msg = send_to_crm(lead_data)
+                if ok: st.success("✅ Lead enviado al CRM")
+                else:  st.error(f"❌ Error enviando: {msg}")
+ 
+st.markdown('<div style="margin-top:40px;padding:20px 0;border-top:1px solid #e2e8f0;text-align:center;font-size:12px;color:#94a3b8;"><strong style="color:#1e3a5f;">PlanningScout</strong> &nbsp;·&nbsp; Boletín Oficial de la Comunidad de Madrid (BOCM) &nbsp;·&nbsp; Datos públicos oficiales &nbsp;·&nbsp; Actualización diaria &nbsp;·&nbsp; 179 municipios de la Comunidad de Madrid</div>',unsafe_allow_html=True)
