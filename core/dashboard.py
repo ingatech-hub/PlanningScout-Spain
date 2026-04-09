@@ -9,13 +9,6 @@ import requests as http_requests
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 
-# --- CORPORATE FIREWALL BYPASS ---
-# This forces Streamlit to allow button clicks and interactions 
-# even when the browser is behind a strict corporate VPN/proxy.
-import os
-os.environ['STREAMLIT_SERVER_ENABLE_CORS'] = 'false'
-os.environ['STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION'] = 'false'
-
 st.set_page_config(
     page_title="PlanningScout Madrid",
     page_icon="🏗️",
