@@ -254,7 +254,7 @@ PROFILES = {
         "types": ["urbanización", "plan especial", "plan especial / parcial", "plan parcial",
                   "obra mayor industrial", "obra mayor nueva construcción", "licitación de obras"],
     },
-    "🏗️ Gran Infra (FCC-style)": {
+    "🏗️ Gran Infraestructura": {
         "key": "fcc",
         "tip": "💡 <strong>Las Tablas Oeste €106M, Los Cerros, Tres Cantos UE.5 €17M.</strong> Anticipación de 12-18 meses antes de licitación. Las Juntas de Compensación activas son tu señal.",
         "min_score": 40, "min_value": 0, "days": 365,
@@ -354,12 +354,17 @@ def build_card(row):
 
     pem_s = fmt(pem_c)
 
-    # BOCM reference + date
+    # BOCM / BOE reference + date
     ref_parts = []
     if bocm:
-        m = re.search(r'BOCM[-_](\d{8})', bocm, re.I)
-        if m:
-            ref_parts.append(f"BOCM-{m.group(1)}")
+        _bocm_is_boe = bocm.lower().startswith("https://www.boe.es") or bocm.lower().startswith("https://boe.es")
+        if _bocm_is_boe:
+            boe_m = re.search(r'BOE[-_]?([A-Z]-\d{4}-\d+|\d{8}[-_]\d+)', bocm, re.I)
+            ref_parts.append(f"BOE-{boe_m.group(1)}" if boe_m else "BOE")
+        else:
+            m = re.search(r'BOCM[-_](\d{8})', bocm, re.I)
+            if m:
+                ref_parts.append(f"BOCM-{m.group(1)}")
     pub = fnd[:10] if fnd else fecha
     if pub:
         try:
@@ -385,6 +390,22 @@ def build_card(row):
     else:
         sbadge = ""
 
+    # ── NEW badge: shown if published within the last 7 days ──
+    _new_badge = ""
+    _pub_for_new = fnd[:10] if fnd else fecha
+    if _pub_for_new:
+        try:
+            _pub_dt = datetime.strptime(_pub_for_new, "%Y-%m-%d")
+            if (datetime.now() - _pub_dt).days <= 7:
+                _new_badge = (
+                    "<span style='font-family:\"JetBrains Mono\",monospace;font-size:9px;"
+                    "font-weight:700;letter-spacing:.08em;text-transform:uppercase;"
+                    "background:#dc2626;color:#fff;border-radius:4px;padding:2px 7px;"
+                    "margin-right:4px;'>NEW</span>"
+                )
+        except Exception:
+            pass
+
     # ─ HEADER (inline styles, guaranteed to render) ─
     head = (
         f'<div style="{SH}">'
@@ -392,7 +413,7 @@ def build_card(row):
         f'    <div style="{SDO}"></div>'
         f'    <span style="{SMU}">{muni}</span>'
         f'  </div>'
-        f'  <div style="{SBD}">{sbadge}{sc_pill(sc)}</div>'
+        f'  <div style="{SBD}">{_new_badge}{sbadge}{sc_pill(sc)}</div>'
         f'</div>'
     )
 
@@ -473,7 +494,9 @@ def build_card(row):
     # ─ FOOTER LINKS ─
     links = []
     if bocm:
-        links.append(f'<a href="{bocm}" target="_blank" rel="noopener" style="{SBP}">↗ Ver en el BOCM</a>')
+        _is_boe = bocm.lower().startswith("https://www.boe.es") or bocm.lower().startswith("https://boe.es")
+        _ver_label = "↗ Ver en el BOE" if _is_boe else "↗ Ver en el BOCM"
+        links.append(f'<a href="{bocm}" target="_blank" rel="noopener" style="{SBP}">{_ver_label}</a>')
     if maps:
         links.append(f'<a href="{maps}" target="_blank" rel="noopener" style="{SBT}">📍 Mapa</a>')
     if pdf:
@@ -485,68 +508,46 @@ def build_card(row):
     footer = (
         f'<div style="{SFO}">'
         + "".join(links)
-        + f'<span style="{SNO}">Datos públicos · BOCM</span>'
+        + f'<span style="{SNO}">Datos públicos · {"BOE" if bocm and (bocm.lower().startswith("https://www.boe.es") or bocm.lower().startswith("https://boe.es")) else "BOCM"}</span>'
         + '</div>'
     )
 
 
-    # ── Expandable detail sections (HTML5 <details> — guaranteed to render) ──
-    _SUM = (
-        "cursor:pointer;padding:10px 20px;font-size:12.5px;font-weight:600;"
-        "color:#334155;display:flex;align-items:center;gap:8px;"
-        "outline:none;user-select:none;-webkit-user-select:none;"
-        "list-style:none;border-top:1px solid #f1f5f9;background:#fff;"
-    )
-    _DIV = "padding:4px 20px 16px 20px;"
+    # ── AI Evaluation — shown inline below the table (replaces old Descripción dropdown) ──
+    # Change 1+2: No dropdowns for description/AI/supplies.
+    # AI Evaluation (col S) shown as a clean inline block.
+    # Phase (col Q) shown as a tag below that.
     extras_html = ""
 
-    # Description: full text only shown in dropdown when too long for 2-line clamp.
-    # (The inline 2-line preview is already rendered above the table.)
-    desc_full = esc(row.get("descripcion", "") or row.get("Description", ""))
-    if desc_full and len(desc_full) > 160:
-        extras_html += (
-            "<details><summary style='" + _SUM + "'>"
-            "<span style='font-size:12px'>📋</span>"
-            "<span style='color:#64748b;font-weight:500;'>Descripción completa</span>"
-            "<span style='margin-left:auto;font-size:10px;color:#94a3b8;'>▼</span>"
-            "</summary><div style='" + _DIV + "'>"
-            "<div style='font-size:13px;color:#374151;line-height:1.65;background:#f8fafc;"
-            "border-radius:10px;padding:14px 16px;'>" + desc_full + "</div>"
-            "</div></details>"
-        )
-
-    # AI Evaluation
     ai_val = str(row.get("ai_evaluation", "") or row.get("AI Evaluation", "") or "").strip()
     if ai_val and ai_val.lower() not in ("nan", "none", ""):
-        ai_e = _html_esc.escape(ai_val[:500])
+        ai_e = _html_esc.escape(ai_val[:600])
         extras_html += (
-            "<details><summary style='" + _SUM + "'>"
-            "<span style='font-size:14px'>🤖</span>"
-            "<span>Análisis IA</span>"
-            "<span style='margin-left:auto;font-size:10px;font-weight:600;"
-            "background:#dbeafe;color:#1e40af;border-radius:20px;padding:2px 8px;flex-shrink:0;'>IA</span>"
-            "</summary><div style='" + _DIV + "'>"
-            "<div style='background:#eff6ff;border-radius:10px;padding:14px 16px;'>"
-            "<div style='font-size:11px;font-weight:700;color:#1d4ed8;letter-spacing:.05em;margin-bottom:8px;'>🤖 ANÁLISIS IA</div>"
-            "<div style='font-size:13px;color:#1e3a5f;line-height:1.65;'>" + ai_e + "</div>"
-            "</div></div></details>"
+            "<div style='border-top:1px solid #f1f5f9;padding:14px 20px 4px 20px;'>"
+            "<div style='font-size:11px;font-weight:700;color:#1e3a5f;letter-spacing:.05em;"
+            "text-transform:uppercase;margin-bottom:7px;'>Análisis del proyecto</div>"
+            "<div style='font-size:13px;color:#334155;line-height:1.65;'>" + ai_e + "</div>"
+            "</div>"
         )
 
-    # Supplies / Materials
-    sup_val = str(row.get("supplies_needed", "") or row.get("Supplies Needed", "") or "").strip()
-    if sup_val and sup_val.lower() not in ("nan", "none", ""):
-        sup_e = _html_esc.escape(sup_val[:350])
+    # Phase (col Q) — shown as a tag row
+    fase_val = str(row.get("fase", "") or "").strip()
+    _FASE_LABELS = {
+        "definitivo":        ("🟢", "Aprobación definitiva",  "#f0fdf4", "#16a34a", "#bbf7d0"),
+        "inicial":           ("🟡", "Aprobación inicial",     "#fffbeb", "#b45309", "#fde68a"),
+        "licitacion":        ("🔵", "Licitación activa",      "#eff4fb", "#1e3a5f", "#bfdbfe"),
+        "primera_ocupacion": ("⚪", "1ª Ocupación",           "#f8fafc", "#64748b", "#e2e8f0"),
+        "en_tramite":        ("🟠", "En trámite",             "#fff7ed", "#c2410c", "#fed7aa"),
+    }
+    if fase_val and fase_val in _FASE_LABELS:
+        fi, ft, fb, fc, fbd = _FASE_LABELS[fase_val]
         extras_html += (
-            "<details><summary style='" + _SUM + "'>"
-            "<span style='font-size:14px'>⚒️</span>"
-            "<span>Materiales y equipos estimados</span>"
-            "<span style='margin-left:auto;font-size:10px;font-weight:600;"
-            "background:#dcfce7;color:#166534;border-radius:20px;padding:2px 8px;flex-shrink:0;'>IA</span>"
-            "</summary><div style='" + _DIV + "'>"
-            "<div style='background:#f0fdf4;border-radius:10px;padding:14px 16px;'>"
-            "<div style='font-size:11px;font-weight:700;color:#15803d;letter-spacing:.05em;margin-bottom:8px;'>⚒️ ESTIMACIÓN MATERIALES</div>"
-            "<div style='font-size:13px;color:#166534;line-height:1.8;'>" + sup_e + "</div>"
-            "</div></div></details>"
+            f"<div style='padding:10px 20px 14px 20px;display:flex;align-items:center;gap:8px;'>"
+            f"<span style='font-size:10px;font-weight:700;text-transform:uppercase;"
+            f"letter-spacing:.07em;color:#94a3b8;'>Fase:</span>"
+            f"<span style='font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;"
+            f"background:{fb};color:{fc};border:1px solid {fbd};'>{fi} {ft}</span>"
+            f"</div>"
         )
 
     return (
