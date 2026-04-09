@@ -115,7 +115,7 @@ PROFILES = {
         "desc":"Licitaciones · Urbanismo · Infraestructuras",
         "types":["urbanización","licitación de obras","plan especial / parcial",
                  "plan especial","obra mayor nueva construcción","obra mayor industrial"],
-        "min_pem":2_000_000,"days":90,
+        "min_pem":0,"days":90,   # 0 = show all type-matched leads; use score filter
         "tip":"Aprobación definitiva de un plan = licitación en 12-18 meses. Prepara equipos técnicos, alianzas y ofertas antes que cualquier competidor.",
         "color":"#1e3a5f",
     },
@@ -123,7 +123,7 @@ PROFILES = {
         "icon":"🏗️","label":"Gran Infra (FCC-style)",
         "desc":"Urbanizaciones >€5M · Licitaciones · Obra civil",
         "types":["urbanización","licitación de obras","plan especial / parcial","plan especial"],
-        "min_pem":5_000_000,"days":90,
+        "min_pem":0,"days":90,   # 0 = show all; use score≥40 to filter quality
         "tip":"FCC busca proyectos a gran escala: Las Tablas Oeste €106M, Los Cerros Vicálvaro, Tres Cantos UE.5 €17M. Anticipación de 12-18 meses antes de licitación = ventaja competitiva.",
         "color":"#1e3a5f",
     },
@@ -561,7 +561,9 @@ with st.sidebar:
     period_label = st.selectbox("Período",list(period_opts.keys()),index=default_idx,key="period_box")
     period_days  = period_opts[period_label]
     min_pem_val  = st.number_input("PEM mínimo (€)",value=prof["min_pem"],step=50_000,min_value=0,key="pem_num")
-    min_score    = st.slider("Puntuación mínima",0,100,0,5,key="score_sl")
+    # Default min score depends on profile
+    default_score = 40 if profile_key in ("constructora","fcc") else 0
+    min_score    = st.slider("Puntuación mínima",0,100,default_score,5,key="score_sl")
 
     st.markdown('<p style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:.12em;margin:14px 0 6px 0;">CRM</p>',unsafe_allow_html=True)
     crm_url = st.secrets.get("ZAPIER_WEBHOOK_URL","")
