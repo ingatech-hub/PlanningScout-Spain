@@ -47,6 +47,8 @@ parser.add_argument("--weeks",   type=int, default=2,
 parser.add_argument("--digest",  action="store_true")
 parser.add_argument("--resume",  action="store_true",
     help="Skip collection, process saved queue from previous run")
+parser.add_argument("--backfill-ai", action="store_true",
+    help="Re-run AI evaluation on existing sheet rows that have empty AI Evaluation column")
 parser.add_argument("--workers", type=int, default=4,
     help="Concurrent processing threads (default 4)")
 args = parser.parse_args()
@@ -291,23 +293,19 @@ KW_EXTRA_FULL = [
     ("sector de suelo",          SECTION_III,  6, "PRO+CON"),
     ("suelo urbanizable",        SECTION_III,  6, "PRO+CON"),
     ("modificación del plan",    SECTION_II,   6, "PRO+CON"),
-
-    # ── FCC / Gran Infraestructura ─────────────────────────────────────────────
-    # These target the large-scale urbanismo FCC specialises in
-    ("plan de sectorización",    SECTION_III,  8, "FCC+CON"),   # sector designation
-    ("obra civil",               SECTION_III,  8, "FCC+CON"),   # civil engineering
-    ("obras de infraestructura", SECTION_III,  8, "FCC+CON"),   # infrastructure works
-    ("concesión de obra",        SECTION_III,  8, "FCC+CON"),   # concession contracts
-    ("aprobación definitiva",    SECTION_II,   10, "FCC+CON"),  # CM-level final approvals
-    ("contrato de obras",        SECTION_II,   8, "FCC+CON"),   # CM public tenders
-    ("licitación de obras",      SECTION_II,   10, "FCC+CON"),  # CM tenders (big ones)
-
-    # ── Kiloutou / Alquiler Maquinaria ─────────────────────────────────────────
-    # Any large construction project = potential equipment rental client
-    ("nueva construcción",       SECTION_II,   8, "KILOUTOU+CON"),  # CM new builds
-    ("obras de reforma",         SECTION_III,  8, "KILOUTOU+MAT"),  # reform works
-    ("obras de adecuación",      SECTION_III,  6, "KILOUTOU"),      # adaptation works
-    ("obras de ampliación",      SECTION_III,  6, "KILOUTOU+MEP"),  # expansion works
+    # ── FCC / Gran Infraestructura ────────────────────────────────────────────
+    ("plan de sectorización",    SECTION_III,  8, "FCC+CON"),
+    ("obra civil",               SECTION_III,  8, "FCC+CON"),
+    ("obras de infraestructura", SECTION_III,  8, "FCC+CON"),
+    ("concesión de obra",        SECTION_III,  8, "FCC+CON"),
+    ("aprobación definitiva",    SECTION_II,  10, "FCC+CON"),
+    ("contrato de obras",        SECTION_II,   8, "FCC+CON"),
+    ("licitación de obras",      SECTION_II,  10, "FCC+CON"),
+    # ── Kiloutou / Alquiler Maquinaria ────────────────────────────────────────
+    ("obras de reforma",         SECTION_III,  8, "KILOUTOU+MAT"),
+    ("obras de adecuación",      SECTION_III,  6, "KILOUTOU"),
+    ("obras de ampliación",      SECTION_III,  6, "KILOUTOU+MEP"),
+    ("nueva construcción",       SECTION_II,   8, "KILOUTOU+CON"),
 ]
 
 # Logistics corridor municipalities for targeted bonus search in full mode
@@ -322,12 +320,45 @@ LOGISTICS_MUNICIPALITIES = [
 ]
 
 # ── Day-scan broad keywords ────────────────────────────────────────────────────
-# These 3 cover virtually everything in Section III for any single day.
-# "licencia" = all individual permits
-# "urbanización" or "plan" = planning/urbanismo docs
-# "licitación" = public contracts
-DAY_SCAN_KWS = ["licencia", "urbanización", "licitación"]
-DAY_SCAN_KWS_V = ["base imponible", "icio", "notificación"]  # Section V
+DAY_SCAN_KWS   = ["licencia", "urbanización", "licitación"]
+DAY_SCAN_KWS_V = ["base imponible", "icio", "notificación"]
+
+# ── Profile trigger words (used in scoring and PDF analysis) ────────────────
+# Presence of these in the document text boosts score for the matching profile.
+PROFILE_TRIGGERS = {
+    "fcc": [
+        "proyecto de urbanización", "obras de urbanización", "junta de compensación",
+        "aprobación definitiva", "plan parcial", "reparcelación",
+        "licitación de obras", "contrato de obras", "obra civil",
+        "infraestructura viaria", "plazo de ejecución", "presupuesto de ejecución material",
+        "sector de suelo urbanizable", "plan de sectorización",
+    ],
+    "constructora": [
+        "proyecto de urbanización", "junta de compensación", "aprobación definitiva",
+        "licitación de obras", "obra mayor", "nueva construcción",
+        "edificio plurifamiliar", "plan especial", "reparcelación",
+    ],
+    "mep": [
+        "edificio plurifamiliar", "nueva construcción", "rehabilitación integral",
+        "primera ocupación", "declaración responsable de obra mayor",
+        "instalación de ascensor", "viviendas", "bloque de viviendas",
+        "licencia de obras mayor", "reforma integral",
+    ],
+    "industrial": [
+        "nave industrial", "almacén", "centro logístico", "polígono industrial",
+        "plataforma logística", "uso industrial", "actividades productivas",
+        "parque empresarial", "distribución logística",
+    ],
+    "retail": [
+        "local comercial", "gran superficie", "centro comercial", "cambio de uso",
+        "uso terciario", "superficie comercial", "actividad comercial",
+    ],
+    "kiloutou": [
+        "obra mayor", "nueva construcción", "rehabilitación", "demolición",
+        "licitación de obras", "nave industrial", "urbanización",
+        "movimiento de tierras", "pavimentación",
+    ],
+}
 
 def is_bad_url(url):
     if not url or "bocm.es" not in url: return True
@@ -610,6 +641,48 @@ def extract_pdf_text_enhanced(url):
     except Exception as e:
         log(f"    PDF error: {e}"); return ""
 
+
+def _fetch_pem_only_from_pdf(pdf_url):
+    """
+    Lightweight PDF scan for PEM/presupuesto values only.
+    Reads first 4 pages looking for financial tables.
+    Called when JSON-LD text exists but has no PEM.
+    Returns a short string with any PEM-like values found.
+    """
+    try:
+        sess = (get_thread_session() if threading.current_thread().name != "MainThread"
+                else get_session())
+        r = sess.get(pdf_url, timeout=30, verify=False,
+                     headers={**make_headers(referer=BOCM_BASE), "Accept":"application/pdf,*/*"})
+        if r.status_code != 200 or len(r.content) < 500: return ""
+        if r.content[:4] != b"%PDF": return ""
+
+        parts = []
+        with pdfplumber.open(io.BytesIO(r.content)) as pdf:
+            for pg in pdf.pages[:4]:
+                # Table extraction first (PEM often in summary table)
+                for tbl in (pg.extract_tables() or []):
+                    for row in (tbl or []):
+                        if not row: continue
+                        row_s = " | ".join(str(c or "") for c in row)
+                        if any(k in row_s.upper() for k in
+                               ["PEM","PRESUPUESTO","IMPORTE","BASE IMPONIBLE",
+                                "EJECUCI","TOTAL","ETAPA","€"]):
+                            parts.append(row_s)
+                # Text scan for PEM lines only (not full text)
+                t = pg.extract_text() or ""
+                for line in t.split("\n"):
+                    if any(k in line.upper() for k in
+                           ["PRESUPUESTO DE EJECUCIÓN","P.E.M","BASE IMPONIBLE",
+                            "ETAPA", "EUROS", "€"]):
+                        parts.append(line.strip())
+
+        if parts:
+            return "TABLA_DATOS:\n" + "\n".join(parts[:30])
+        return ""
+    except Exception as e:
+        return ""
+
 def fetch_announcement(url):
     """Returns (text, pdf_url, pub_date, doc_title)."""
     url_low = url.lower()
@@ -671,7 +744,20 @@ def fetch_announcement(url):
         ptext = extract_pdf_text_enhanced(pdf_url)
         if ptext: parts.append(ptext)
 
-    return re.sub(r'\s+', ' ', " ".join(parts)).strip(), pdf_url, pub_date, ""
+    text_out = re.sub(r'\s+', ' ', " ".join(parts)).strip()
+
+    # ── PEM-only PDF fetch (when text found but no PEM in text) ────────────
+    # Many BOCM urbanismo announcements contain the project description but
+    # the PEM is only in the attached PDF financial summary table.
+    # If we have text but no PEM, do a targeted PDF fetch to look for PEM.
+    if text_out and len(text_out) > 100 and pdf_url:
+        if not any(p in text_out.lower() for p in
+                   ["presupuesto de ejecución","p.e.m","base imponible","€","euros"]):
+            pem_text = _fetch_pem_only_from_pdf(pdf_url)
+            if pem_text:
+                text_out = text_out + " " + pem_text
+
+    return text_out, pdf_url, pub_date, ""
 
 # ════════════════════════════════════════════════════════════
 # CLASSIFICATION — 5 stages
@@ -1190,6 +1276,44 @@ def keyword_extract(text, url, pub_date):
     res["lead_score"]  = score_lead(res)
     return res
 
+
+def generate_supplies_estimate(permit_type, pem, description):
+    """Keyword-based supplies/equipment estimate — fallback when AI doesn't provide it."""
+    pt  = (permit_type or "").lower()
+    pem = pem or 0
+    d   = (description or "").lower()
+    pem_s = f"€{pem/1_000_000:.1f}M" if pem >= 1_000_000 else (f"€{int(pem/1000)}K" if pem >= 1000 else "N/D")
+
+    if "urbanización" in pt or "urbaniz" in d:
+        return (f"🔧 Redes eléctrica BT/MT, alumbrado público, CT | "
+                f"🛒 Hormigón HA-25 ~500m³, tuberías PVC DN200-500, áridos | "
+                f"🚧 Excavadoras, compactadores, dúmpers ({pem_s})")
+    if "nueva construcción" in pt or "plurifamiliar" in d or "nueva planta" in pt:
+        m2 = int(pem/1800) if pem else 0
+        elev = max(1, m2//500) if m2 else 2
+        return (f"🔧 Ascensores ×{elev}, HVAC centralizado, PCI | "
+                f"🛒 Acero ~{int(m2*0.05)}t, hormigón ~{int(m2*0.25)}m³ | "
+                f"🚧 Grúa torre, andamios, plataformas elevadoras")
+    if "industrial" in pt or "nave" in d:
+        m2 = int(pem/500) if pem else 0
+        return (f"🔧 Instal. eléctrica MT, clima industrial, PCI/rociadores | "
+                f"🛒 Perfil metálico {int(m2*0.04)}t, panel sándwich {m2}m², solera | "
+                f"🚧 Grúas, robots demolición, explanación")
+    if "rehabilitación" in pt or "reforma" in pt:
+        return (f"🔧 Sustitución instalaciones (eléctrica, fontanería, HVAC) | "
+                f"🛒 Aislamiento, carpintería, revestimientos | "
+                f"🚧 Andamios fachada, plataformas tijera")
+    if "licitación" in pt:
+        return (f"🏗️ Licitación {pem_s} — presentar oferta técnica + económica | "
+                f"🚧 Adjudicatario necesitará maquinaria de construcción | "
+                f"🛒 Acordar precios de materiales con ganador")
+    if "primera ocupación" in pt:
+        return ("🔧 Revisiones finales, legalización contadores, OCA | "
+                "🛒 Acabados finales: pavimento, pintura, carpintería | "
+                "🚧 Plataformas elevadoras para remates")
+    return (f"🏗️ Proyecto {pem_s} — revisar PDF para detalles técnicos | "
+            "🛒 Materiales según especificaciones del proyecto")
+
 def ai_extract(text, url, pub_date):
     if not USE_AI: return keyword_extract(text, url, pub_date)
     try:
@@ -1238,7 +1362,21 @@ DOCUMENT CLASSIFICATION RULES:
 - "disolución de la junta de compensación" → PROJECT FINISHED → permit_type:"none"
 - "Dejar sin efecto" → CORRECTION of old error, current doc IS valid → keep as lead
 - "declaración responsable de obra mayor" → valid permit since Ley 1/2020 = licencia equivalent
-- Reparcelación/convenio urbanístico/estudio de detalle → early-stage urbanismo → phase:"inicial" """
+- Reparcelación/convenio urbanístico/estudio de detalle → early-stage urbanismo → phase:"inicial"
+
+ai_evaluation RULES (NEVER leave empty):
+- Always 2-3 sentences in Spanish, commercially focused.
+- Sentence 1: What this is commercially (project scale, who benefits).
+- Sentence 2: Specific action + timing ("Contactar a la Junta ANTES de que cierren contratos de obra civil en 6-12 meses").
+- Sentence 3: Risk/caveat or competitive intelligence.
+- Example: "Urbanización definitiva en corredor norte de Madrid con JC ya constituida. Gran Constructora debe pre-calificarse para las futuras licitaciones de obra civil (estimado 2026-2027). Oportunidad directa para instaladores MEP y suministradores de materiales."
+
+profile_fit RULES (add this field):
+- List which profiles benefit: e.g. ["fcc","constructora","mep","kiloutou"]
+- Based on project type: urbanización/licitación → fcc+constructora; obra mayor → mep+compras; industrial → industrial+kiloutou
+
+TABLA_DATOS extraction: If text contains "TABLA_DATOS:", extract PEM from those rows.
+declared_value_eur: SUM all "ETAPA X" values. For ICIO: use "BASE IMPONIBLE" value. """
 
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -1267,10 +1405,47 @@ DOCUMENT CLASSIFICATION RULES:
         elif isinstance(val, (int, float)):
             if val <= 0 or val > 3_000_000_000: d["declared_value_eur"] = None
 
-        if not d.get("lead_score"):   d["lead_score"]   = score_lead(d)
-        if not d.get("municipality"): d["municipality"] = extract_municipality(text)
-        if not d.get("expediente"):   d["expediente"]   = extract_expediente(text)
-        if not d.get("phase"):        d["phase"]        = detect_phase(text)
+        if not d.get("lead_score"):    d["lead_score"]    = score_lead(d)
+        if not d.get("municipality"):  d["municipality"]  = extract_municipality(text)
+        if not d.get("expediente"):    d["expediente"]    = extract_expediente(text)
+        if not d.get("phase"):         d["phase"]         = detect_phase(text)
+
+        # Force ai_evaluation: never save a lead with empty AI analysis
+        if not d.get("ai_evaluation") or len(str(d.get("ai_evaluation","")).strip()) < 20:
+            pt   = (d.get("permit_type") or "").lower()
+            pem  = d.get("declared_value_eur")
+            muni = d.get("municipality","Madrid")
+            pem_s = f"€{pem/1_000_000:.1f}M" if pem and pem >= 1_000_000 else (f"€{int(pem/1000):.0f}K" if pem else "PEM no declarado")
+            if "urbanización" in pt or "reparcelación" in pt:
+                d["ai_evaluation"] = (f"Proyecto de urbanización definitivo en {muni} — {pem_s}. "
+                    f"Gran Constructora y FCC-style deben pre-calificarse para futura licitación civil (estimado 12-24 meses). "
+                    f"Instaladores MEP y suministradores de materiales: contactar a la Junta de Compensación ahora.")
+            elif "licitación" in pt:
+                d["ai_evaluation"] = (f"Licitación activa en {muni} — {pem_s}. "
+                    f"Plazo de oferta activo. Constructoras deben presentar oferta técnica y económica urgente. "
+                    f"Suministradores: acordar precios con futuro adjudicatario.")
+            elif "plan especial" in pt or "plan parcial" in pt:
+                d["ai_evaluation"] = (f"Aprobación de planeamiento en {muni}. "
+                    f"Este paso habilita la futura urbanización y obra nueva — oportunidad de inteligencia anticipada. "
+                    f"Promotores RE y Gran Constructora: monitorizar para entrada en JC o propuesta técnica.")
+            elif "industrial" in pt or "nave" in pt:
+                d["ai_evaluation"] = (f"Proyecto industrial en {muni} — {pem_s}. "
+                    f"Oportunidad directa para instaladores eléctricos MT, PCI y suministradores de estructura metálica. "
+                    f"Kiloutou y empresas de alquiler: contactar al promotor antes del inicio de obra.")
+            elif "nueva construcción" in pt or "rehabilitación" in pt:
+                d["ai_evaluation"] = (f"Obra mayor en {muni} — {pem_s}. "
+                    f"Instaladores MEP deben contactar al promotor antes de que el constructor cierre contratos. "
+                    f"Ascensores, HVAC y PCI se adjudican típicamente en fase de estructura.")
+            else:
+                d["ai_evaluation"] = (f"Proyecto de construcción en {muni} — {pem_s}. "
+                    f"Revisar el PDF original para detalles técnicos y cronograma. "
+                    f"Contactar al promotor o Ayuntamiento para confirmar fase de ejecución.")
+
+        # Supplies needed: generate if missing
+        if not d.get("supplies_needed") or len(str(d.get("supplies_needed","")).strip()) < 10:
+            d["supplies_needed"] = generate_supplies_estimate(
+                d.get("permit_type",""), d.get("declared_value_eur"), d.get("description",""))
+
         return d
 
     except Exception as e:
@@ -1551,9 +1726,79 @@ def send_digest():
 # ════════════════════════════════════════════════════════════
 # MAIN
 # ════════════════════════════════════════════════════════════
+
+def _run_ai_backfill():
+    """
+    Re-run AI extraction on existing sheet rows that have empty AI Evaluation.
+    Reads each row, calls ai_extract on its description text, writes back.
+    Usage: python engine.py --client demo_madrid.json --backfill-ai
+    """
+    ws = get_sheet()
+    if not ws: return
+    try:
+        all_rows = ws.get_all_values()
+        if len(all_rows) < 2: log("Sheet empty"); return
+        header = all_rows[0]
+        # Find column indices
+        try:
+            ai_col   = header.index("AI Evaluation") + 1    # 1-indexed for gspread
+            sup_col  = header.index("Supplies Needed") + 1
+            desc_col = header.index("Description") + 1
+            pt_col   = header.index("Permit Type") + 1
+            muni_col = header.index("Municipality") + 1
+            url_col  = header.index("Source URL") + 1
+            pem_col  = header.index("Declared Value PEM (€)") + 1
+        except ValueError as e:
+            log(f"❌ Column not found: {e}"); return
+
+        to_update = []
+        for row_i, row in enumerate(all_rows[1:], start=2):
+            # Only process rows with empty AI Evaluation
+            ai_val = row[ai_col-1] if len(row) >= ai_col else ""
+            if ai_val.strip(): continue  # already has AI eval
+
+            desc  = row[desc_col-1] if len(row) >= desc_col else ""
+            pt    = row[pt_col-1]   if len(row) >= pt_col   else ""
+            muni  = row[muni_col-1] if len(row) >= muni_col else "Madrid"
+            url   = row[url_col-1]  if len(row) >= url_col  else ""
+            pem_v = pem_float(row[pem_col-1]) if len(row) >= pem_col else None
+
+            # Build a minimal text to pass to AI
+            text = f"TIPO: {pt}. MUNICIPIO: {muni}. DESCRIPCIÓN: {desc}. URL: {url}"
+            if USE_AI:
+                result = ai_extract(text, url, "")
+            else:
+                result = keyword_extract(text, url, "")
+
+            if result:
+                ai_eval = result.get("ai_evaluation","") or ""
+                supplies= result.get("supplies_needed","") or ""
+                to_update.append((row_i, ai_col, ai_eval, sup_col, supplies))
+                log(f"  🤖 Row {row_i}: {muni} → AI eval generated ({len(ai_eval)} chars)")
+
+        if not to_update:
+            log("✅ All rows already have AI evaluation"); return
+
+        log(f"📝 Updating {len(to_update)} rows…")
+        for row_i, ai_c, ai_val, sup_c, sup_val in to_update:
+            try:
+                if ai_val:  ws.update_cell(row_i, ai_c, ai_val[:400])
+                if sup_val: ws.update_cell(row_i, sup_c, sup_val[:250])
+                time.sleep(1)  # rate limit
+            except Exception as e:
+                log(f"  ❌ Row {row_i}: {e}")
+
+        log(f"✅ AI backfill complete: {len(to_update)} rows enriched")
+    except Exception as e:
+        log(f"❌ Backfill error: {e}"); import traceback; traceback.print_exc()
+
 def run():
     if args.digest:
         log("📧 Digest-only mode"); get_sheet(); send_digest(); return
+
+    if getattr(args, "backfill_ai", False):
+        log("🤖 BACKFILL AI MODE — enriching existing rows with AI evaluation")
+        _run_ai_backfill(); return
 
     today     = datetime.now()
     date_to   = today
