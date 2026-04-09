@@ -78,6 +78,8 @@ def log(msg):
 # HTTP — thread-local sessions for concurrent processing
 # ════════════════════════════════════════════════════════════
 BOCM_BASE = "https://www.bocm.es"
+BOE_BASE  = "https://www.boe.es"
+BOE_RSS   = "https://www.boe.es/rss/anuncios.php?cl=45000000&s=B"  # CPV 45 = obras construccion
 
 USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -158,12 +160,17 @@ def safe_get(url, timeout=30, retries=3, backoff_base=8, referer=None, thread_lo
 # ════════════════════════════════════════════════════════════
 def extract_bocm_id(url):
     m = re.search(r'(BOCM-\d{8}-\d+)', str(url), re.I)
+    if m: return m.group(1).upper()
+    # BOE IDs: BOE-B-YYYY-NNNNN
+    m = re.search(r'(BOE-[ABCS]-\d{4}-\d+)', str(url), re.I)
     return m.group(1).upper() if m else None
 
 def normalise_url(url):
     """Any PDF/JSON URL → HTML entry page (has JSON-LD with full text)."""
     m = re.search(r'(bocm-\d{8}-\d+)', url, re.I)
     if m: return f"{BOCM_BASE}/{m.group(1).lower()}"
+    # BOE URLs: keep as-is (they have their own structure)
+    if "boe.es" in url.lower(): return url
     return url
 
 # ════════════════════════════════════════════════════════════
@@ -255,6 +262,20 @@ KW_WEEKLY = [
     ("base imponible",           SECTION_III, 10, "ALL"),
     ("base imponible",           SECTION_V,    8, "ALL"),
     ("liquidación icio",         SECTION_V,    8, "ALL"),
+
+    # ── Contribuciones especiales — CONFIRMED completed/active obras ─────────
+    # These docs confirm municipal obras ARE happening (sidewalks, street works).
+    # They contain: exact work description, obra budget, catastral references,
+    # and street addresses. Perfect signal for MEP, Materials, and Machinery.
+    ("contribuciones especiales", SECTION_III, 10, "MEP+MAT"),
+
+    # ── Licencia primera ocupación — building done, final MEP phase ──────────
+    ("primera ocupación",         SECTION_III, 10, "MEP"),
+
+    # ── Acta de recepción / liquidación — project complete (subcontract signal)
+    ("acta de recepción",         SECTION_III,  8, "CON+MAT"),
+    ("liquidación de obras",      SECTION_III,  8, "CON+MAT"),
+    ("resolución de adjudicación",SECTION_III,  8, "CON+MAT"),
 ]
 
 KW_EXTRA_FULL = [
@@ -306,6 +327,29 @@ KW_EXTRA_FULL = [
     ("obras de adecuación",      SECTION_III,  6, "KILOUTOU"),
     ("obras de ampliación",      SECTION_III,  6, "KILOUTOU+MEP"),
     ("nueva construcción",       SECTION_II,   8, "KILOUTOU+CON"),
+
+    # ── MEP-specific (confirmed buildings with systems to install) ─────────
+    ("instalación eléctrica",    SECTION_III,  6, "MEP"),
+    ("instalación fontanería",   SECTION_III,  5, "MEP"),
+    ("instalación climatización",SECTION_III,  5, "MEP"),
+    ("instalación ascensor",     SECTION_III,  6, "MEP"),
+    ("sala de máquinas",         SECTION_III,  5, "MEP"),
+    ("vivienda protegida",       SECTION_III,  8, "MEP+CON"),
+    ("residencia universitaria", SECTION_III,  6, "MEP+CON"),
+    ("viviendas de protección",  SECTION_III,  8, "MEP+CON"),
+
+    # ── Retail / Expansión — activity licensing with size data ─────────────
+    ("superficie útil",          SECTION_III,  6, "RET"),
+    ("apertura de establecimiento",SECTION_III, 6, "RET"),
+    ("implantación de actividad",SECTION_III,  6, "RET+MEP"),
+
+    # ── Industrial / Logistics — confirmed large builds ──────────────────
+    ("centro de datos",          SECTION_III,  6, "IND+MEP+MAT"),
+    ("data center",              SECTION_III,  5, "IND+MEP"),
+    ("depósito",                 SECTION_III,  5, "IND+MAT"),
+    ("cámara frigorífica",       SECTION_III,  5, "IND+MEP"),
+    ("instalación fotovoltaica", SECTION_III,  6, "IND+MEP"),
+    ("zona industrial",          SECTION_III,  6, "IND+MAT"),
 ]
 
 # Logistics corridor municipalities for targeted bonus search in full mode
@@ -323,6 +367,7 @@ LOGISTICS_MUNICIPALITIES = [
 DAY_SCAN_KWS   = [
     "licencia", "urbanización", "licitación",
     "reparcelación", "aprobación definitiva", "plan especial", "plan parcial",
+    "contribuciones especiales",  # confirmed obra documents with budget + addresses
 ]
 DAY_SCAN_KWS_V = ["base imponible", "icio", "notificación"]
 
@@ -364,7 +409,8 @@ PROFILE_TRIGGERS = {
 }
 
 def is_bad_url(url):
-    if not url or "bocm.es" not in url: return True
+    if not url: return True
+    if "bocm.es" not in url and "boe.es" not in url: return True
     low = url.lower()
     bad_exts  = (".xml",".css",".js",".png",".jpg",".gif",".ico",".woff",".svg",".zip",".epub")
     bad_paths = ("/advanced-search","/login","/user","/admin","/sites/","/modules/","#","javascript:","/CM_Boletin_BOCM/")
@@ -819,6 +865,29 @@ def fetch_announcement(url):
     url_low = url.lower()
     pdf_url = None
 
+    # ── BOE documents: fetch directly (they have full HTML content) ──────────
+    if "boe.es" in url_low and "diario_boe" in url_low:
+        r = safe_get(url, timeout=25)
+        if r and r.status_code == 200:
+            soup = BeautifulSoup(r.text, "html.parser")
+            # BOE page structure: main content in #cabeceraFichero + #textoBOE
+            parts = []
+            for sel in ["#textoBOE", ".dispo", "article", "main"]:
+                el = soup.select_one(sel)
+                if el: parts.append(el.get_text(separator=" ", strip=True)); break
+            # Extract PDF link
+            for a in soup.find_all("a", href=True):
+                if ".pdf" in a["href"].lower() and "boe" in a["href"].lower():
+                    pdf_url = urljoin(BOE_BASE, a["href"]) if a["href"].startswith("/") else a["href"]
+                    break
+            text_out = re.sub(r'\s+', ' ', " ".join(parts)).strip() if parts else ""
+            pub_date = extract_date_from_url(url)
+            if not pub_date:
+                m = re.search(r'(\d{4}-\d{2}-\d{2})', url)
+                if m: pub_date = m.group(1)
+            if text_out and len(text_out) > 50:
+                return text_out, pdf_url, pub_date, ""
+
     # Convert to HTML entry page
     html_url = url
     if url_low.endswith(".pdf") or url_low.endswith(".json"):
@@ -922,6 +991,17 @@ HARD_REJECT = [
     # FINISHED projects (no more opportunity)
     "disolución de la junta de compensación",
     "disolver la junta de compensación",
+    # Noise: pure tax / admin with no construction content
+    "tasa de residuos", "tasa de basuras", "tasa por recogida",
+    "contribuciones por prestación de servicios",  # ≠ contribuciones especiales obras
+    "impuesto sobre vehículos", "padrón municipal de habitantes",
+    "tasa por utilización del dominio público",
+    "ordenanza de tráfico", "ordenanza de movilidad",
+    "subasta de bienes municipales", "enajenación de bienes",
+    "permuta de bienes", "cesión de uso",
+    # BOE noise: service contracts (not construction)
+    "servicios de limpieza integral", "servicios de vigilancia",
+    "servicios de mantenimiento de jardines",
 ]
 
 APPLICATION_SIGNALS = [
@@ -969,6 +1049,14 @@ GRANT_SIGNALS = [
     "modificación puntual",
     "aprobación del estudio de detalle",
     "base imponible del icio",  # ICIO = confirmed obra
+    # Contribuciones especiales = obras confirmed active/complete
+    "contribuciones especiales por la ejecución",
+    "obras de pavimentación", "obras de urbanización de la calle",
+    "se aprueba definitivamente la ordenanza fiscal",  # = obra approved and funded
+    "adjudicado a", "contrato adjudicado",
+    "resolución de adjudicación",
+    "acta de comprobación del replanteo",  # = obra started on-site
+    "acta de recepción de las obras",      # = obra complete
 ]
 
 CONSTRUCTION_SIGNALS = [
@@ -1004,6 +1092,12 @@ CONSTRUCTION_SIGNALS = [
     "edificio de oficinas",
     "superficie comercial", "centro comercial", "gran superficie",
     "local comercial", "uso terciario",
+    # Contribuciones especiales = confirmed active obra
+    "contribuciones especiales", "obras de pavimentación",
+    "acta de recepción", "acta de comprobación del replanteo",
+    "resolución de adjudicación", "contrato de obras adjudicado",
+    "centro de datos", "data center", "instalación fotovoltaica",
+    "vivienda protegida", "viviendas de protección oficial",
 ]
 
 SMALL_ACTIVITY = [
@@ -1097,6 +1191,9 @@ def score_lead(p):
         score += 15
     elif pt in ("licencia de actividad",):
         score += 10
+    elif pt in ("contribuciones especiales",):
+        # Confirmed active obra — very actionable for MEP/MAT
+        score += 30
     else:
         if any(k in desc for k in ["proyecto de urbanización","junta de compensación","reparcelación"]):
             score += 40
@@ -1109,9 +1206,11 @@ def score_lead(p):
 
     # Phase bonus
     phase = (p.get("phase","") or "").lower()
-    if phase == "definitivo":   score += 8
-    elif phase == "licitacion": score += 10
-    elif phase == "inicial":    score -= 5
+    if phase == "definitivo":      score += 8
+    elif phase == "licitacion":    score += 10
+    elif phase == "adjudicacion":  score += 15  # contract awarded = most actionable
+    elif phase == "en_obra":       score += 12  # on-site = urgent for suppliers
+    elif phase == "inicial":       score -= 5
 
     # Budget
     val = p.get("declared_value_eur")
@@ -1243,15 +1342,42 @@ def extract_pem_value(text):
         v = _parse_euro(m.group(1))
         if v and v >= 1000: return round(v, 2)
 
-    # 6. Public contract budget
+    # 5b. "coste de las obras" in contribuciones especiales docs
+    # = total project cost (confirmed by municipality, highly accurate)
+    m = re.search(
+        r'coste\s+(?:total\s+)?de\s+(?:las\s+)?obras[\s:]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*(?:euros?|€)',
+        c, re.I)
+    if m:
+        v = _parse_euro(m.group(1))
+        if v and v >= 500: return round(v, 2)
+
+    # 5c. Importe adjudicación (= final contracted price, most accurate for licitaciones)
     for pat in [
+        r'(?:importe|precio)\s+(?:de\s+)?(?:la\s+)?adjudicaci[oó]n[:\s€]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)',
+        r'adjudicado\s+(?:por|en)[:\s€]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*(?:euros?|€)',
+    ]:
+        m = re.search(pat, c, re.I)
+        if m:
+            v = _parse_euro(m.group(1))
+            if v and v >= 1000: return round(v, 2)
+
+    # 6. Public contract budget — presupuesto de licitación
+    # NOTE: BOCM licitación docs state "presupuesto base de licitación, con IVA"
+    # The true PEM (excluding IVA) = amount / 1.21. We extract the licitación
+    # budget INCLUDING IVA (as stated) and divide to get the net construction cost.
+    for pat in [
+        r'presupuesto\s+(?:base\s+)?de\s+licitaci[oó]n,?\s+(?:con\s+)?IVA(?:\s+incluido)?[:\s]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*(?:euros?|€)',
         r'presupuesto\s+(?:base\s+)?de\s+licitaci[oó]n[:\s]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*(?:euros?|€)',
         r'valor\s+estimado[:\s]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*(?:euros?|€)',
     ]:
         m = re.search(pat, c, re.I)
         if m:
             v = _parse_euro(m.group(1))
-            if v and v >= 1000: return round(v, 2)
+            if v and v >= 1000:
+                # If "con IVA" present, remove IVA to get true PEM
+                if re.search(r'con\s+IVA', pat, re.I) or re.search(r'con\s+IVA', c[max(0,m.start()-30):m.end()+10], re.I):
+                    v = round(v / 1.21, 2)  # remove 21% IVA → true PEM
+                return round(v, 2)
 
     # 7. Generic presupuesto
     m = re.search(
@@ -1265,8 +1391,16 @@ def extract_pem_value(text):
 
 def detect_phase(text):
     t = text.lower()
+    # Most actionable first: contract awarded (adjudicación) or obra started/done
+    if any(p in t for p in ["adjudicado a","contrato adjudicado","resolución de adjudicación",
+                             "importe de adjudicación","precio de adjudicación"]):
+        return "adjudicacion"  # contract awarded = call subcontractors NOW
+    if any(p in t for p in ["acta de comprobación del replanteo","acta de inicio de obras",
+                             "acta de recepción de las obras","obras ejecutadas",
+                             "contribuciones especiales por la ejecución"]):
+        return "en_obra"  # on-site = urgent for materials and MEP
     if any(p in t for p in ["licitación de obras","contrato de obras","se convoca licitación",
-                             "convocatoria de licitación","adjudicación de obras"]):
+                             "convocatoria de licitación"]):
         return "licitacion"
     if any(p in t for p in ["aprobación definitiva","aprobar definitivamente",
                              "se concede","se otorga","licencia concedida"]):
@@ -1380,6 +1514,9 @@ def keyword_extract(text, url, pub_date):
         res["permit_type"] = "plan especial"
     elif any(p in t for p in ["actividad","local comercial","establecimiento"]):
         res["permit_type"] = "licencia de actividad"
+    elif any(p in t for p in ["contribuciones especiales","cuota tributaria de reparto",
+                               "ordenanza fiscal de contribuciones"]):
+        res["permit_type"] = "contribuciones especiales"
 
     # Description
     desc = None
@@ -1485,6 +1622,15 @@ CRITICAL RULES:
 11. confidence: "high" (all fields confirmed) | "medium" | "low"
 
 DOCUMENT CLASSIFICATION RULES:
+- "contribuciones especiales por la ejecución de obras" → obras CONFIRMED active/complete
+  → permit_type:"contribuciones especiales", phase:"en_obra"
+  → Extract "presupuesto base de licitación" as declared_value_eur (divide by 1.21 if "con IVA")
+  → Lead is highly actionable: exact addresses known, obra is happening NOW
+- "resolución de adjudicación" → contract AWARDED → permit_type from obra type, phase:"adjudicacion"
+  → Extract "importe de adjudicación" as declared_value_eur
+- "acta de recepción de las obras" → project COMPLETE → lower score, flag for follow-up only
+- "anuncio de licitación" from BOE → state-level tender → extract all budget fields
+  → Check if Madrid geography: ADIF, Metro, Hospital, Comunidad de Madrid agencies
 - "se ha SOLICITADO" + "plazo de veinte días" → APPLICATION not grant → permit_type:"none"
 - "aprobar DEFINITIVAMENTE" → FINAL APPROVAL → phase:"definitivo", confidence:"high"
 - "aprobación INICIAL" → first step, public comment follows → phase:"inicial", confidence:"medium"
@@ -1956,6 +2102,76 @@ def send_digest():
 # MAIN
 # ════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════
+# BOE SEARCH — Boletín Oficial del Estado
+# Searches BOE Section B (Anuncios) for construction licitaciones
+# in the Comunidad de Madrid. These are STATE-LEVEL contracts (ADIF,
+# Ministerios, AENA, hospitals) — bigger budgets than municipal BOCM.
+#
+# URL format: https://www.boe.es/buscar/boe.php
+# Target keywords: CPV 45000000 (Trabajos de construcción) + Madrid
+# ════════════════════════════════════════════════════════════
+BOE_SEARCH_KEYWORDS = [
+    # (keyword, scope_note)
+    ("licitación obras Madrid",          "CON+MAT"),
+    ("obras construcción Madrid",        "CON+MAT"),
+    ("obras urbanización Madrid",        "PRO+CON"),
+    ("rehabilitación edificio Madrid",   "MEP+MAT"),
+    ("nave industrial Madrid",           "IND+MAT"),
+    ("licitación obras Getafe",          "IND+MAT"),
+    ("licitación obras Alcalá de Henares","CON+MAT"),
+    ("licitación obras Alcobendas",      "CON+MAT"),
+    ("licitación ADIF Madrid",           "CON+MAT"),  # major infra
+    ("licitación Comunidad de Madrid obras","CON+MAT"),
+]
+
+def search_boe(d_from, d_to, global_seen):
+    """
+    Search BOE Section B (Anuncios de licitación) for Madrid-area obra contracts.
+    BOE handles state-level infrastructure: ADIF, Ministerios, AENA, hospitals.
+    Returns list of BOE document URLs.
+    """
+    boe_urls = []
+    seen_local = set()
+    df_s = d_from.strftime("%d/%m/%Y")
+    dt_s = d_to.strftime("%d/%m/%Y")
+
+    # BOE search URL: full-text search with date range
+    # Searches Sección B (anuncios) which has licitaciones
+    BOE_SEARCH = "https://www.boe.es/buscar/boe.php"
+
+    for kw, tag in BOE_SEARCH_KEYWORDS:
+        if not time_ok(need_s=30): break
+        try:
+            params = (
+                f"?campo%5B0%5D=OBJ&dato%5B0%5D={quote(kw)}"
+                f"&campo%5B5%5D=FEC&dato%5B5%5D={quote(df_s)}"
+                f"&campo%5B6%5D=FEC&dato%5B6%5D={quote(dt_s)}"
+                f"&page_hits=40&accion=Buscar"
+            )
+            r = safe_get(BOE_SEARCH + params, timeout=25)
+            if not r or r.status_code != 200: continue
+            soup = BeautifulSoup(r.text, "html.parser")
+            # BOE results: links contain /diario_boe/txt.php?id=BOE-B-...
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if not ("diario_boe" in href or "boe.es/boe/" in href): continue
+                full = urljoin(BOE_BASE, href) if href.startswith("/") else href
+                bid = extract_bocm_id(full)
+                key = bid if bid else full
+                if key in seen_local or key in global_seen: continue
+                # Only take licitacion (Section B) and anuncio documents
+                if "BOE-B" in (bid or "") or "diario_boe" in href:
+                    seen_local.add(key)
+                    boe_urls.append(full)
+            time.sleep(1.5)  # polite to BOE
+        except Exception as e:
+            log(f"  ⚠️ BOE search error [{kw}]: {e}")
+
+    log(f"  📰 BOE: {len(boe_urls)} URLs found")
+    return boe_urls
+
+
 def _run_ai_backfill():
     """
     Re-run AI extraction on existing sheet rows that have empty AI Evaluation.
@@ -2034,7 +2250,7 @@ def run():
     date_from = today - timedelta(weeks=WEEKS_BACK)
 
     log("=" * 70)
-    log(f"🏗️  PlanningScout Madrid — Engine v9")
+    log(f"🏗️  PlanningScout Madrid — Engine v10 (BOE+ContribEsp+IVAfix)")
     log(f"📅  {today.strftime('%Y-%m-%d %H:%M')}  |  Mode: {MODE.upper()}")
     log(f"📆  {date_from.strftime('%d/%m/%Y')} → {date_to.strftime('%d/%m/%Y')} ({WEEKS_BACK}w)")
     log(f"⚙️  {N_WORKERS} processing workers  |  ⏱️ Budget: {MAX_RUN_MINUTES}min")
@@ -2162,6 +2378,17 @@ def run():
             rss_urls  = get_rss_links(date_from, date_to, global_seen)
             rss_added = sum(1 for u in rss_urls if add_url(u))
             log(f"  RSS: +{rss_added} | {len(all_urls)} unique")
+
+        # ── SOURCE 5: BOE (weekly/full only) ──────────────────────────────────────
+        # The BOE (Boletín Oficial del Estado) publishes state-level licitaciones
+        # for Madrid: ADIF, Ministerios, AENA, hospitals, Comunidad de Madrid.
+        # These are typically larger contracts (€500K-€50M+) than municipal BOCM.
+        if MODE in ("weekly", "full") and time_ok(need_s=120):
+            log(f"\n{'─'*55}")
+            log(f"📰 SOURCE 5: BOE (state licitaciones Madrid)")
+            boe_urls  = search_boe(date_from, date_to, global_seen)
+            boe_added = sum(1 for u in boe_urls if add_url(u))
+            log(f"  BOE: +{boe_added} | {len(all_urls)} unique")
 
         # Remove already-seen
         all_urls = [u for u in all_urls
