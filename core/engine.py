@@ -1643,12 +1643,12 @@ def get_sheet():
         log(f"❌ Sheet connection failed: {e}"); return None
 
 def load_seen():
-    """Load seen URLs from Leads + Permits tabs."""
+    """Load seen URLs from Permits tab."""
     global _seen_urls, _seen_bocm_ids
     ws = get_sheet()
     if not ws: return
     gc = ws.spreadsheet
-    for tab in ["Leads", "Permits"]:
+    for tab in ["Permits"]:
         try:
             for row in gc.worksheet(tab).get_all_values()[1:]:
                 if len(row) > 9 and row[9].strip():
@@ -1658,7 +1658,7 @@ def load_seen():
                     if bid: _seen_bocm_ids.add(bid)
         except gspread.WorksheetNotFound: pass
         except Exception as e: log(f"⚠️  load_seen [{tab}]: {e}")
-    log(f"✅ {len(_seen_urls)} URLs / {len(_seen_bocm_ids)} IDs (Leads+Permits)")
+    log(f"✅ {len(_seen_urls)} URLs / {len(_seen_bocm_ids)} IDs (Permits)")
 
 def write_permit(p, pdf_url=""):
     ws  = get_sheet()
