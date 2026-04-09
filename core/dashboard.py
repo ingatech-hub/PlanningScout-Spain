@@ -1,27 +1,3 @@
-"""
-PlanningScout Madrid — Dashboard
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Access model (no Streamlit account needed for users):
-  - Free trial:  planningscout.streamlit.app?perfil=expansion
-  - Paid client: planningscout.streamlit.app?token=carlos_vimad
-  - Users open the URL in any browser — zero login, zero account.
-  - Only Inga (developer) needs a Streamlit Cloud account.
-
-Streamlit sleeping:
-  - Free tier sleeps after 7 days without a visitor.
-  - Fix: UptimeRobot (free) pings every 5 min → app stays awake.
-  - URL: uptimerobot.com → New monitor → HTTP → planningscout.streamlit.app
-
-Lead card rendering fix:
-  - ALL card HTML uses inline styles (not CSS classes).
-  - Reason: Streamlit's markdown parser breaks nested <div class="..."> structures.
-  - Inline styles bypass the Markdown parser entirely — guaranteed rendering.
-
-Logo:
-  - navbar.png is base64-encoded at startup from same folder as this file.
-  - Embedded as <img src="data:image/png;base64,..."> — no blur, crisp display.
-"""
-
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
