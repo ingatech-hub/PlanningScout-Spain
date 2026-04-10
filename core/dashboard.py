@@ -401,7 +401,7 @@ def build_card(row):
                     "<span style='font-family:\"JetBrains Mono\",monospace;font-size:9px;"
                     "font-weight:700;letter-spacing:.08em;text-transform:uppercase;"
                     "background:#dc2626;color:#fff;border-radius:4px;padding:2px 7px;"
-                    "margin-right:4px;'>NEW</span>"
+                    "margin-right:4px;'>Nuevo</span>"
                 )
         except Exception:
             pass
@@ -509,6 +509,7 @@ def build_card(row):
         f'<div style="{SFO}">'
         + "".join(links)
         + f'<span style="{SNO}">Datos públicos · {"BOE" if bocm and (bocm.lower().startswith("https://www.boe.es") or bocm.lower().startswith("https://boe.es")) else "BOCM"}</span>'
+        + f'<a href="mailto:info@planningscout.com?subject={html_lib.escape("Consulta%20lead%3A%20" + muni + "%20%E2%80%94%20" + (expd or ref_str[:40]))}&body={html_lib.escape("Hola,%0A%0AMe%20interesa%20obtener%20más%20información%20sobre%20este%20proyecto%3A%0A%0AMunicipio%3A%20" + muni + "%0ADirección%3A%20" + addr + "%0AExpediente%3A%20" + expd + "%0AURL%3A%20" + bocm + "%0A%0A[Describe%20tu%20consulta%20aquí]")}" style="{_F};display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:500;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;padding:4px 10px;border-radius:7px;text-decoration:none;white-space:nowrap;margin-left:4px;" title="Reportar un error o solicitar más información sobre este proyecto">✉️ Reportar error / Más info</a>'
         + '</div>'
     )
 
@@ -556,6 +557,26 @@ def build_card(row):
             f"<span style='font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;"
             f"background:{fb};color:{fc};border:1px solid {fbd};'>{fi} {ft}</span>"
             f"</div>"
+        )
+
+    # Supplies Needed — dropdown, col T, with AI disclaimer note
+    sup_val = str(row.get("supplies_needed", "") or row.get("Supplies Needed", "") or "").strip()
+    if sup_val and sup_val.lower() not in ("nan", "none", ""):
+        sup_e = _html_esc.escape(sup_val[:500])
+        extras_html += (
+            "<details><summary style='" + _SUM + "'>"
+            "<span style='font-size:12px'>🛒</span>"
+            "<span style='color:#64748b;font-weight:500;'>Materiales y suministros estimados</span>"
+            "<span style='margin-left:auto;font-size:10px;color:#94a3b8;'>▼</span>"
+            "</summary><div style='" + _DIV + "'>"
+            "<div style='font-size:12.5px;color:#374151;line-height:1.7;background:#f8fafc;"
+            "border-radius:10px;padding:14px 16px;'>" + sup_e + "</div>"
+            "<div style='margin-top:8px;font-size:10.5px;color:#94a3b8;font-style:italic;"
+            "font-family:\"JetBrains Mono\",monospace;padding:0 2px;'>"
+            "⚠️ Estimación generada por IA. Puede no ser 100% precisa. "
+            "Verificar siempre con el proyecto técnico original."
+            "</div>"
+            "</div></details>"
         )
 
     return (
