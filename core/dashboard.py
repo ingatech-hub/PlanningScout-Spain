@@ -4,6 +4,7 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 from datetime import datetime, timedelta
 import re
+from urllib.parse import unquote
 import html as html_lib
 import html as _html_esc  # alias used in card builder
 import os
@@ -57,7 +58,7 @@ LOGO_HTML = (
 # ════════════════════════════════════════════════════════════
 qp             = st.query_params
 url_token      = qp.get("token", "")
-url_profile    = qp.get("perfil", "")
+url_profile    = unquote(qp.get("perfil", ""))   # decode %20, %2F, emoji encoding etc.
 client_tokens  = {}
 try:
     ct = st.secrets.get("client_tokens", {})
@@ -70,6 +71,8 @@ forced_profile_key = None
 if url_token and url_token in client_tokens:
     forced_profile_key = client_tokens[url_token]
 elif url_profile:
+    # url_profile is now properly decoded (e.g. "compras" or "🛒 Compras / Materiales").
+    # We store it as-is — the matching below handles both forms without mangling.
     forced_profile_key = url_profile
 
 if require_token and not forced_profile_key:
@@ -678,8 +681,21 @@ profile_names = list(PROFILES.keys())
 default_idx   = len(profile_names) - 1  # Vista General
 is_locked     = False
 
+default_idx   = len(profile_names) - 1  # Vista General
+is_locked     = False
+
 if forced_profile_key:
-    matched     = next((n for n, p in PROFILES.items() if p["key"] == forced_profile_key), profile_names[-1])
+    # Match priority:
+    # 1. Exact match on p["key"]  (e.g. "compras", "instaladores") — used by index.html and share links
+    # 2. Exact match on profile name (e.g. "🛒 Compras / Materiales") — fallback for bookmarked URLs
+    # Never mangle the string — just compare directly after URL-decoding (done above).
+    matched = next(
+        (n for n, p in PROFILES.items() if p["key"] == forced_profile_key),
+        next(
+            (n for n in profile_names if n == forced_profile_key),
+            profile_names[-1]   # final fallback → Vista General
+        )
+    )
     default_idx = profile_names.index(matched)
     is_locked   = True
 
