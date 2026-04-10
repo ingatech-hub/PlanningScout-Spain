@@ -16,6 +16,7 @@ import gspread
 from google.oauth2.service_account import Credentials as SACredentials
 import urllib3
 import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup as BS4  # Rename to avoid conflict
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ════════════════════════════════════════════════════════════
@@ -1971,23 +1972,6 @@ def write_permit(p, pdf_url=""):
             profile_fit_str,  # NEW COLUMN
         ]
 
-        row = [
-            p.get("date_granted",""), muni, addr,
-            p.get("applicant") or "",
-            p.get("permit_type") or "obra mayor",
-            dec or "", est, maps,
-            (p.get("description") or "")[:350],
-            url, pdf_url or "",
-            p.get("extraction_mode","keyword"),
-            p.get("confidence",""),
-            datetime.now().strftime("%Y-%m-%d %H:%M"),
-            p.get("lead_score",0),
-            p.get("expediente",""),
-            p.get("phase",""),
-            p.get("estimated_pem",""),
-            (p.get("ai_evaluation") or "")[:500],
-            (p.get("supplies_needed") or "")[:300],
-        ]
         try:
             if ws:
                 ws.append_row(row, value_input_option="USER_ENTERED")
@@ -2524,15 +2508,37 @@ def run():
             rss_added = sum(1 for u in rss_urls if add_url(u))
             log(f"  RSS: +{rss_added} | {len(all_urls)} unique")
 
-        # ════════════════════════════════════════════════════════════
-# BOE (Boletín Oficial del Estado) SCRAPER MODULE
-# Targets Section V (Anuncios) - Licitaciones y Urbanismo
-# Uses XML extraction (fast, accurate) instead of PDF parsing
-# ════════════════════════════════════════════════════════════
-
-# Add these imports at the top of your engine.py (with the other imports)
-import xml.etree.ElementTree as ET
-from bs4 import BeautifulSoup as BS4  # Rename to avoid conflict
+        # ═══SOURCE 5: BOE ═════════════════════════════════════════════════════════
+        # ── SOURCE 5: BOE (Boletín Oficial del Estado) ───────────────────────────
+        # State-level licitaciones: ADIF, Ministerios, AENA, Comunidad de Madrid
+        # Uses XML extraction (fast, accurate) instead of PDF parsing
+        if MODE in ("weekly", "full") and time_ok(need_s=180):
+            log(f"\n{'─'*55}")
+            log(f"📰 SOURCE 5: BOE (state licitaciones - XML extraction)")
+            
+            boe_items = search_boe_construction(date_from, date_to, global_seen)
+            
+            if boe_items:
+                log(f"  Processing {len(boe_items)} BOE items concurrently...")
+                boe_saved = boe_skipped = boe_errors = 0
+                
+                with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
+                    boe_futures = {
+                        executor.submit(process_boe_item, boe_id, title, dept, idx+1, len(boe_items)): boe_id
+                        for idx, (boe_id, title, dept) in enumerate(boe_items)
+                        if time_ok(need_s=10)
+                    }
+                    
+                    for future in as_completed(boe_futures):
+                        try:
+                            s, sk, e = future.result()
+                            boe_saved += s; boe_skipped += sk; boe_errors += e
+                        except Exception as ex:
+                            log(f"  ❌ BOE future error: {ex}"); boe_errors += 1
+                
+                log(f"  BOE results: ✅{boe_saved} saved | ⏭️{boe_skipped} skipped | ❌{boe_errors} errors")
+            else:
+                log(f"  📰 BOE: No relevant items found in date range")
 
 # ──────────────────────────────────────────────────────────────
 # BOE CONFIGURATION
@@ -2931,111 +2937,9 @@ def process_boe_item(boe_id, title, department, idx, total):
 
 
 # ════════════════════════════════════════════════════════════
-# INTEGRATION INTO MAIN run() FUNCTION
-# ════════════════════════════════════════════════════════════
-
-# Replace the existing BOE search block in run() with this:
-
-"""
-# ── SOURCE 5: BOE (Boletín Oficial del Estado) ───────────────────────────
-# State-level licitaciones: ADIF, Ministerios, AENA, Comunidad de Madrid
-# Uses XML extraction (fast, accurate) instead of PDF parsing
-# Only runs in weekly/full mode (not daily)
-
-if MODE in ("weekly", "full") and time_ok(need_s=180):
-    log(f"\n{'─'*55}")
-    log(f"📰 SOURCE 5: BOE (state licitaciones - XML extraction)")
-    
-    # ── SOURCE 5: BOE (Boletín Oficial del Estado) ───────────────────────────
-        # State-level licitaciones: ADIF, Ministerios, AENA, Comunidad de Madrid
-        # Uses XML extraction (fast, accurate) instead of PDF parsing
-        # Only runs in weekly/full mode (not daily)
-        
-        if MODE in ("weekly", "full") and time_ok(need_s=180):
-            log(f"\n{'─'*55}")
-            log(f"📰 SOURCE 5: BOE (state licitaciones - XML extraction)")
-            
-            # Search BOE for construction licitaciones
-            boe_items = search_boe_construction(date_from, date_to, global_seen)
-            
-            if boe_items:
-                log(f"  Processing {len(boe_items)} BOE items concurrently...")
-                
-                boe_saved = boe_skipped = boe_errors = 0
-                
-                with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
-                    boe_futures = {
-                        executor.submit(process_boe_item, boe_id, title, dept, idx+1, len(boe_items)): boe_id
-                        for idx, (boe_id, title, dept) in enumerate(boe_items)
-                        if time_ok(need_s=10)
-                    }
-                    
-                    for future in as_completed(boe_futures):
-                        if not time_ok(need_s=10):
-                            for f in boe_futures:
-                                f.cancel()
-                            log(f"  ⏰ BOE processing stopped - time budget")
-                            break
-                        
-                        try:
-                            s, sk, e = future.result()
-                            boe_saved += s
-                            boe_skipped += sk
-                            boe_errors += e
-                        except Exception as ex:
-                            log(f"  ❌ BOE future error: {ex}")
-                            boe_errors += 1
-                
-                log(f"  BOE results: ✅{boe_saved} saved | ⏭️{boe_skipped} skipped | ❌{boe_errors} errors")
-                
-                # Add to overall totals (IMPORTANT!)
-                # Note: We don't add to saved/skipped/errors here because BOE items
-                # are processed separately from the main URL queue
-            else:
-                log(f"  📰 BOE: No relevant items found in date range")
-
-    # ── CONCURRENT PROCESSING ────────────────────────────────────────────────────
-    saved = skipped = errors = 0
-    log(f"\n{'─'*55}")
-    log(f"⚙️  Processing {len(all_urls)} URLs with {N_WORKERS} workers…")
-    log(f"{'─'*55}")
-
-    with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
-        futures = {
-            executor.submit(process_one, url, idx+1, len(all_urls)): url
-            for idx, url in enumerate(all_urls)
-            if time_ok(need_s=10)
-        }
-        completed = 0
-        for future in as_completed(futures):
-            if not time_ok(need_s=10):
-                # Cancel remaining futures gracefully
-                for f in futures:
-                    f.cancel()
-                log(f"\n⏰ Time budget reached — {len(futures)-completed} URLs not processed")
-                log(f"💾 Queue still at {QUEUE_FILE} — re-run with --resume to continue")
-                break
-            try:
-                s, sk, e = future.result()
-                saved += s; skipped += sk; errors += e
-            except Exception as ex:
-                log(f"  ❌ Future error: {ex}"); errors += 1
-            completed += 1
-            if completed % 25 == 0:
-                log(f"  ⚙️  {completed}/{len(all_urls)} | "
-                    f"✅{saved} 💾 ⏭️{skipped} ❌{errors} | {elapsed_str()}")
-
-    log(f"\n{'='*70}")
-    log(f"✅ {saved} saved | {skipped} skipped | {errors} errors | {elapsed_str()}")
-    log(f"📊 Acceptance rate: {100*saved//max(1,saved+skipped+errors)}%")
-    log("=" * 70)
-
-    if os.path.exists(QUEUE_FILE): os.remove(QUEUE_FILE)
-    if today.weekday() == 0: log("\n📧 Monday → digest"); send_digest()
-
 if not os.environ.get("GCP_SERVICE_ACCOUNT_JSON"):
-    try:
-        from google.colab import auth; auth.authenticate_user(); log("✅ Colab auth")
-    except: pass
+        try:
+            from google.colab import auth; auth.authenticate_user(); log("✅ Colab auth")
+        except: pass
 
 run()
