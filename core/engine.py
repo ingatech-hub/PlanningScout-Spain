@@ -15,6 +15,7 @@ import pdfplumber
 import gspread
 from google.oauth2.service_account import Credentials as SACredentials
 import urllib3
+import xml.etree.ElementTree as ET
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ════════════════════════════════════════════════════════════
@@ -2379,34 +2380,468 @@ def run():
             rss_added = sum(1 for u in rss_urls if add_url(u))
             log(f"  RSS: +{rss_added} | {len(all_urls)} unique")
 
-        # ── SOURCE 5: BOE (weekly/full only) ──────────────────────────────────────
-        # The BOE (Boletín Oficial del Estado) publishes state-level licitaciones
-        # for Madrid: ADIF, Ministerios, AENA, hospitals, Comunidad de Madrid.
-        # These are typically larger contracts (€500K-€50M+) than municipal BOCM.
-        if MODE in ("weekly", "full") and time_ok(need_s=120):
-            log(f"\n{'─'*55}")
-            log(f"📰 SOURCE 5: BOE (state licitaciones Madrid)")
-            boe_urls  = search_boe(date_from, date_to, global_seen)
-            boe_added = sum(1 for u in boe_urls if add_url(u))
-            log(f"  BOE: +{boe_added} | {len(all_urls)} unique")
+        # ════════════════════════════════════════════════════════════
+# BOE (Boletín Oficial del Estado) SCRAPER MODULE
+# Targets Section V (Anuncios) - Licitaciones y Urbanismo
+# Uses XML extraction (fast, accurate) instead of PDF parsing
+# ════════════════════════════════════════════════════════════
 
-        # Remove already-seen
-        all_urls = [u for u in all_urls
-                    if u not in _seen_urls and
-                    (not extract_bocm_id(u) or extract_bocm_id(u) not in _seen_bocm_ids)]
+# Add these imports at the top of your engine.py (with the other imports)
+import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup as BS4  # Rename to avoid conflict
 
-        log(f"\n{'═'*55}")
-        log(f"📋 TOTAL: {len(all_urls)} new URLs to process (elapsed: {elapsed_str()})")
-        log(f"{'═'*55}")
+# ──────────────────────────────────────────────────────────────
+# BOE CONFIGURATION
+# ──────────────────────────────────────────────────────────────
 
-        with open(QUEUE_FILE,"w") as f:
-            json.dump(all_urls, f)
-        log(f"💾 Queue saved — use --resume to restart if interrupted")
+BOE_BASE = "https://www.boe.es"
+BOE_SEARCH_URL = "https://www.boe.es/buscar/boe.php"
 
-    if not all_urls:
-        log("ℹ️  Nothing new.")
-        if today.weekday() == 0: send_digest()
-        return
+# Target departments (Departamento/Emisor codes)
+BOE_DEPARTMENTS = [
+    "Administración Local",
+    "Ministerio de Transportes y Movilidad Sostenible", 
+    "Ministerio de Vivienda y Agenda Urbana",
+    "Ministerio para la Transición Ecológica y el Reto Demográfico",
+    "Agencia de Infraestructuras Ferroviarias",  # ADIF
+    "Comunidad de Madrid",
+    "Agencia Estatal de Seguridad Aérea",  # AESA
+]
+
+# Construction/urbanismo keywords for title filtering
+BOE_CONSTRUCTION_KEYWORDS = [
+    "obras", "urbanización", "reparcelación", "construcción", 
+    "infraestructura", "saneamiento", "edificación", "rehabilitación",
+    "plan parcial", "plan especial", "licitación obras",
+    "ejecución de obras", "proyecto de urbanización",
+    "ordenación urbana", "equipamiento urbano", "obra civil",
+    "infraestructura ferroviaria", "infraestructura viaria",
+    "abastecimiento", "depuración", "pavimentación",
+    "nueva construcción", "reforma", "ampliación edificio",
+]
+
+# Exclusion keywords (noise filters)
+BOE_EXCLUSION_KEYWORDS = [
+    "suministro de", "servicios de limpieza", "servicios de vigilancia",
+    "servicios de mantenimiento de jardines", "servicios informáticos",
+    "consultoría", "asistencia técnica", "software", "hardware",
+    "mobiliario", "vehículos", "alimentación", "catering",
+    "seguros", "transporte escolar", "recogida de residuos",
+]
+
+def build_boe_search_url(date_from, date_to, page=1):
+    """
+    Construct BOE advanced search URL with proper filters.
+    
+    Parameters:
+    - campo[0]=ORIS & dato[0][5]=5 → Section V (Anuncios)
+    - campo[6]=FPU → Date range
+    - campo[2]=DEM → Department filter (applied in results filtering)
+    
+    Returns search results page URL.
+    """
+    df = date_from.strftime("%d/%m/%Y")
+    dt = date_to.strftime("%d/%m/%Y")
+    
+    # Build the search URL
+    # ORIS=5 targets Section V (Anuncios - Licitaciones)
+    url = (
+        f"{BOE_SEARCH_URL}?"
+        f"campo%5B0%5D=ORIS&dato%5B0%5D%5B5%5D=5"  # Section V
+        f"&campo%5B6%5D=FPU"  # Date field
+        f"&dato%5B6%5D%5B0%5D={quote(df)}"  # Start date
+        f"&dato%5B6%5D%5B1%5D={quote(dt)}"  # End date
+        f"&page_hits=50"  # Results per page
+        f"&page={page}"  # Page number
+        f"&sort_field%5B0%5D=FPU"  # Sort by publication date
+        f"&sort_order%5B0%5D=desc"  # Descending (newest first)
+        f"&accion=Buscar"
+    )
+    
+    return url
+
+def filter_by_title(title):
+    """
+    Check if document title contains construction keywords.
+    Returns True if relevant, False if noise.
+    """
+    if not title:
+        return False
+    
+    title_lower = title.lower()
+    
+    # Reject if contains exclusion keywords
+    for excl in BOE_EXCLUSION_KEYWORDS:
+        if excl in title_lower:
+            return False
+    
+    # Accept if contains construction keywords
+    for kw in BOE_CONSTRUCTION_KEYWORDS:
+        if kw in title_lower:
+            return True
+    
+    return False
+
+def extract_boe_xml_text(boe_id):
+    """
+    Fetch BOE document as XML and extract clean text.
+    
+    BOE provides XML at: /diario_boe/xml.php?id=BOE-B-YYYY-NNNNN
+    This is 100x faster and more accurate than PDF parsing.
+    
+    Returns (text, xml_url, metadata_dict)
+    """
+    xml_url = f"{BOE_BASE}/diario_boe/xml.php?id={boe_id}"
+    
+    try:
+        r = safe_get(xml_url, timeout=25, thread_local=True)
+        if not r or r.status_code != 200:
+            return None, xml_url, {}
+        
+        # Parse XML
+        try:
+            root = ET.fromstring(r.content)
+        except ET.ParseError:
+            # Fallback to BeautifulSoup for malformed XML
+            soup = BS4(r.content, 'xml')
+            root = soup
+        
+        # Extract metadata
+        metadata = {
+            "emisor": "",
+            "fecha_pub": "",
+            "seccion": "",
+            "departamento": "",
+        }
+        
+        # Try to extract metadata from XML structure
+        # BOE XML structure: <documento><metadatos>...</metadatos><texto>...</texto></documento>
+        if hasattr(root, 'find'):
+            meta_node = root.find('.//metadatos') or root.find('metadatos')
+            if meta_node is not None:
+                # Extract emisor/departamento
+                emisor = meta_node.find('.//emisor') or meta_node.find('emisor')
+                if emisor is not None:
+                    metadata["emisor"] = emisor.text or ""
+                
+                # Extract fecha
+                fecha = meta_node.find('.//fecha_publicacion') or meta_node.find('fecha_publicacion')
+                if fecha is not None:
+                    metadata["fecha_pub"] = fecha.text or ""
+                
+                # Extract departamento
+                dept = meta_node.find('.//departamento') or meta_node.find('departamento')
+                if dept is not None:
+                    metadata["departamento"] = dept.text or ""
+        
+        # Extract main text from <texto> node
+        text_parts = []
+        
+        # Method 1: Find <texto> node
+        if hasattr(root, 'find'):
+            texto_node = root.find('.//texto') or root.find('texto')
+            if texto_node is not None:
+                # Get all text content recursively
+                text_parts.append(ET.tostring(texto_node, encoding='unicode', method='text'))
+        
+        # Method 2: BeautifulSoup fallback
+        if not text_parts:
+            soup = BS4(r.content, 'xml')
+            texto = soup.find('texto')
+            if texto:
+                text_parts.append(texto.get_text(separator=' ', strip=True))
+        
+        # Method 3: Get all text from XML
+        if not text_parts:
+            soup = BS4(r.content, 'xml')
+            # Remove metadata nodes
+            for tag in soup.find_all(['metadatos', 'diario', 'sumario']):
+                tag.decompose()
+            text_parts.append(soup.get_text(separator=' ', strip=True))
+        
+        full_text = ' '.join(text_parts)
+        full_text = re.sub(r'\s+', ' ', full_text).strip()
+        
+        if len(full_text) < 100:
+            return None, xml_url, metadata
+        
+        return full_text, xml_url, metadata
+        
+    except Exception as e:
+        log(f"    ⚠️ BOE XML error [{boe_id}]: {e}")
+        return None, xml_url, {}
+
+def search_boe_construction(date_from, date_to, global_seen):
+    """
+    Search BOE for construction/urbanismo licitaciones.
+    
+    Returns list of (boe_id, title, department) tuples.
+    Uses XML extraction instead of PDF parsing.
+    """
+    boe_items = []
+    seen_local = set()
+    page = 1
+    max_pages = 10  # Safety limit
+    
+    log(f"  🔍 BOE search: {date_from.strftime('%d/%m/%Y')} → {date_to.strftime('%d/%m/%Y')}")
+    
+    while page <= max_pages:
+        if not time_ok(need_s=30):
+            break
+        
+        search_url = build_boe_search_url(date_from, date_to, page)
+        
+        try:
+            r = safe_get(search_url, timeout=25)
+            if not r or r.status_code != 200:
+                break
+            
+            soup = BeautifulSoup(r.text, "html.parser")
+            
+            # BOE search results structure:
+            # Results are in <div class="resultado"> or <li class="resultado-busqueda">
+            results = (soup.find_all("div", class_="resultado") or 
+                      soup.find_all("li", class_="resultado-busqueda") or
+                      soup.find_all("div", class_="resultado-busqueda"))
+            
+            if not results:
+                # No more results
+                break
+            
+            found_new = False
+            
+            for result in results:
+                # Extract BOE ID from link
+                link = result.find("a", href=True)
+                if not link:
+                    continue
+                
+                href = link["href"]
+                
+                # Extract BOE-B-YYYY-NNNNN ID
+                boe_id_match = re.search(r'(BOE-[ABCS]-\d{4}-\d+)', href, re.I)
+                if not boe_id_match:
+                    continue
+                
+                boe_id = boe_id_match.group(1).upper()
+                
+                # Skip if already seen
+                if boe_id in seen_local or boe_id in global_seen:
+                    continue
+                
+                # Extract title
+                title_elem = result.find("p", class_="nombre_resultado") or link
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                
+                # Extract department/emisor
+                dept_elem = result.find("p", class_="emisor") or result.find("span", class_="emisor")
+                department = dept_elem.get_text(strip=True) if dept_elem else ""
+                
+                # Filter by title keywords
+                if not filter_by_title(title):
+                    continue
+                
+                # Filter by department (if we can identify it)
+                dept_relevant = False
+                if department:
+                    for target_dept in BOE_DEPARTMENTS:
+                        if target_dept.lower() in department.lower():
+                            dept_relevant = True
+                            break
+                else:
+                    # If no department found in HTML, accept it (we'll check in XML)
+                    dept_relevant = True
+                
+                if not dept_relevant:
+                    continue
+                
+                # Add to results
+                seen_local.add(boe_id)
+                boe_items.append((boe_id, title, department))
+                found_new = True
+            
+            # Check for next page
+            next_page = soup.find("a", class_="next") or soup.find("a", string=re.compile(r"Siguiente|»", re.I))
+            if not next_page or not found_new:
+                break
+            
+            page += 1
+            time.sleep(1.5)  # Be polite to BOE servers
+            
+        except Exception as e:
+            log(f"  ⚠️ BOE page {page} error: {e}")
+            break
+    
+    log(f"  📰 BOE: {len(boe_items)} relevant items found (filtered from search)")
+    return boe_items
+
+def process_boe_item(boe_id, title, department, idx, total):
+    """
+    Process a single BOE item (to be used in ThreadPoolExecutor).
+    
+    Returns (saved, skipped, error) counts.
+    """
+    try:
+        # Extract XML text
+        text, xml_url, metadata = extract_boe_xml_text(boe_id)
+        
+        if not text or len(text) < 100:
+            return 0, 1, 0  # skip - no content
+        
+        # Secondary department filter using metadata
+        meta_dept = metadata.get("departamento", "") or metadata.get("emisor", "")
+        dept_ok = False
+        if meta_dept:
+            for target in BOE_DEPARTMENTS:
+                if target.lower() in meta_dept.lower():
+                    dept_ok = True
+                    break
+        else:
+            dept_ok = True  # No metadata, proceed
+        
+        if not dept_ok:
+            return 0, 1, 0  # skip - wrong department
+        
+        # Classify
+        is_lead, reason, tier = classify_permit(text)
+        if not is_lead:
+            return 0, 1, 0  # skip
+        
+        # Build URL for the document
+        html_url = f"{BOE_BASE}/diario_boe/txt.php?id={boe_id}"
+        pdf_url = f"{BOE_BASE}/boe/dias/{boe_id[-4:]}/{boe_id[6:10]}/{boe_id[11:15]}/pdfs/{boe_id}.pdf"
+        
+        # Extract data
+        pub_date = metadata.get("fecha_pub", "") or extract_date_from_url(boe_id)
+        
+        # Use AI extraction (or keyword fallback)
+        p = extract(text, html_url, pub_date)
+        
+        if p is None:
+            return 0, 1, 0  # skip
+        
+        # Override/enhance with BOE-specific data
+        if not p.get("applicant") and department:
+            p["applicant"] = department
+        
+        if not p.get("municipality") and "Madrid" in text:
+            # Try to extract municipality from text
+            p["municipality"] = extract_municipality(text)
+        
+        # Add BOE-specific note to description
+        if p.get("description"):
+            p["description"] = f"[BOE] {p['description']}"
+        else:
+            p["description"] = f"[BOE] {title[:200]}"
+        
+        # Check minimum value
+        dec = p.get("declared_value_eur")
+        if MIN_VALUE_EUR and dec and isinstance(dec, (int, float)) and dec < MIN_VALUE_EUR:
+            return 0, 1, 0  # below minimum
+        
+        # Estimate PEM if missing
+        if not p.get("estimated_pem"):
+            if dec and isinstance(dec, (int, float)) and dec > 0:
+                p["estimated_pem"] = f"✅ PEM confirmado (BOE): €{dec:,.0f}"
+            else:
+                # Try to estimate from text
+                est_result = _estimate_pem_from_pdf(text)
+                if est_result.get("estimated_pem"):
+                    ep = est_result["estimated_pem"]
+                    mth = est_result.get("method", "estimación")
+                    bas = est_result.get("basis", "")
+                    p["estimated_pem"] = f"Estimación PEM (BOE): €{ep:,.0f} ({mth}; {bas})"
+                    if not dec:
+                        p["declared_value_eur"] = ep
+                        p["lead_score"] = score_lead(p)
+                else:
+                    p["estimated_pem"] = "⚪ Sin PEM en BOE"
+        
+        # Ensure AI evaluation exists
+        if not p.get("ai_evaluation") or len(str(p.get("ai_evaluation", "")).strip()) < 20:
+            pt = (p.get("permit_type") or "").lower()
+            pem = p.get("declared_value_eur")
+            pem_s = (f"€{pem/1_000_000:.1f}M" if pem and pem >= 1_000_000
+                    else (f"€{int(pem/1000):.0f}K" if pem else "PEM no declarado"))
+            
+            p["ai_evaluation"] = (
+                f"[BOE - Licitación estatal] {department or 'Administración Pública'} — {pem_s}. "
+                f"Licitación de alto valor publicada en BOE (ámbito nacional/autonómico). "
+                f"Grandes constructoras: revisar pliego técnico urgente. "
+                f"Contratos estatales típicamente requieren pre-calificación y garantías significativas."
+            )
+        
+        # Ensure supplies needed exists
+        if not p.get("supplies_needed") or len(str(p.get("supplies_needed", "")).strip()) < 10:
+            p["supplies_needed"] = generate_supplies_estimate(
+                p.get("permit_type", ""), p.get("declared_value_eur"), p.get("description", ""))
+        
+        # Write to sheet
+        if write_permit(p, pdf_url):
+            return 1, 0, 0  # saved
+        return 0, 1, 0  # dup
+        
+    except Exception as e:
+        log(f"  ❌ BOE [{idx}] {boe_id}: {e}")
+        return 0, 0, 1  # error
+
+
+# ════════════════════════════════════════════════════════════
+# INTEGRATION INTO MAIN run() FUNCTION
+# ════════════════════════════════════════════════════════════
+
+# Replace the existing BOE search block in run() with this:
+
+"""
+# ── SOURCE 5: BOE (Boletín Oficial del Estado) ───────────────────────────
+# State-level licitaciones: ADIF, Ministerios, AENA, Comunidad de Madrid
+# Uses XML extraction (fast, accurate) instead of PDF parsing
+# Only runs in weekly/full mode (not daily)
+
+if MODE in ("weekly", "full") and time_ok(need_s=180):
+    log(f"\n{'─'*55}")
+    log(f"📰 SOURCE 5: BOE (state licitaciones - XML extraction)")
+    
+    # Search BOE for construction licitaciones
+    boe_items = search_boe_construction(date_from, date_to, global_seen)
+    
+    if boe_items:
+        log(f"  Processing {len(boe_items)} BOE items concurrently...")
+        
+        boe_saved = boe_skipped = boe_errors = 0
+        
+        with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
+            boe_futures = {
+                executor.submit(process_boe_item, boe_id, title, dept, idx+1, len(boe_items)): boe_id
+                for idx, (boe_id, title, dept) in enumerate(boe_items)
+                if time_ok(need_s=10)
+            }
+            
+            for future in as_completed(boe_futures):
+                if not time_ok(need_s=10):
+                    for f in boe_futures:
+                        f.cancel()
+                    log(f"  ⏰ BOE processing stopped - time budget")
+                    break
+                
+                try:
+                    s, sk, e = future.result()
+                    boe_saved += s
+                    boe_skipped += sk
+                    boe_errors += e
+                except Exception as ex:
+                    log(f"  ❌ BOE future error: {ex}")
+                    boe_errors += 1
+        
+        log(f"  BOE results: ✅{boe_saved} saved | ⏭️{boe_skipped} skipped | ❌{boe_errors} errors")
+        
+        # Add to overall totals
+        saved += boe_saved
+        skipped += boe_skipped
+        errors += boe_errors
+    else:
+        log(f"  📰 BOE: No relevant items found in date range")
+"""
 
     # ── CONCURRENT PROCESSING ────────────────────────────────────────────────────
     saved = skipped = errors = 0
