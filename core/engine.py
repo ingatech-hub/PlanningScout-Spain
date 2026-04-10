@@ -1546,42 +1546,113 @@ def keyword_extract(text, url, pub_date):
     return res
 
 
-def generate_supplies_estimate(permit_type, pem, description):
-    """Keyword-based supplies/equipment estimate — fallback when AI doesn't provide it."""
+def generate_supplies_estimate(permit_type, pem, description, full_text=""):
+    """
+    Enhanced keyword-based supplies estimate with PDF text analysis.
+    Used as fallback when AI doesn't provide detailed supplies.
+    """
     pt  = (permit_type or "").lower()
     pem = pem or 0
     d   = (description or "").lower()
+    t   = (full_text or "").lower()
     pem_s = f"€{pem/1_000_000:.1f}M" if pem >= 1_000_000 else (f"€{int(pem/1000)}K" if pem >= 1000 else "N/D")
 
+    # Try to extract specific quantities from text
+    supplies = []
+    
+    # Extract concrete quantities
+    for pat in [r"hormigón.*?([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{1,2})?)\s*m[3³]",
+                r"([0-9]{1,3}(?:[.,][0-9]{3})*)\s*m[3³].*?hormigón"]:
+        m = re.search(pat, t, re.I)
+        if m:
+            vol = m.group(1).replace(".","").replace(",",".")
+            supplies.append(f"Hormigón HA-25 {vol}m³")
+            break
+    
+    # Extract pipe quantities
+    for pat in [r"tubería.*?DN\s*([0-9]+).*?([0-9.,]+)\s*(?:km|m)",
+                r"colector.*?DN\s*([0-9]+).*?([0-9.,]+)\s*(?:km|m)"]:
+        m = re.search(pat, t, re.I)
+        if m:
+            dn = m.group(1)
+            length = m.group(2).replace(".","").replace(",",".")
+            unit = "km" if "km" in t[m.end():m.end()+20].lower() else "m"
+            supplies.append(f"Tubería PVC DN{dn} {length}{unit}")
+            break
+    
+    # Extract steel quantities
+    for pat in [r"acero.*?([0-9]{1,3}(?:[.,][0-9]{3})*)\s*(?:t|tn|toneladas)",
+                r"([0-9]{1,3}(?:[.,][0-9]{3})*)\s*(?:t|tn).*?acero"]:
+        m = re.search(pat, t, re.I)
+        if m:
+            tons = m.group(1).replace(".","").replace(",",".")
+            supplies.append(f"Acero corrugado B500S {tons}t")
+            break
+
+    # If we found specific quantities, use them
+    if supplies:
+        return " | ".join(["🔧 " + supplies[0] if supplies else "", 
+                          "🛒 " + ", ".join(supplies[1:]) if len(supplies) > 1 else "",
+                          f"🚧 Maquinaria pesada según proyecto ({pem_s})"])
+
+    # Otherwise, use intelligent estimates by project type
     if "urbanización" in pt or "urbaniz" in d:
-        return (f"🔧 Redes eléctrica BT/MT, alumbrado público, CT | "
-                f"🛒 Hormigón HA-25 ~500m³, tuberías PVC DN200-500, áridos | "
-                f"🚧 Excavadoras, compactadores, dúmpers ({pem_s})")
+        m2 = int(pem / 160) if pem else 0
+        if m2 > 5000:
+            return (f"🔧 Red eléctrica BT/MT, {m2//500} CT, alumbrado LED | "
+                    f"🛒 Hormigón HA-25 ~{int(m2*0.3)}m³, tubería PVC DN200-500 ~{int(m2*0.04)}km, "
+                    f"zahorra {int(m2*0.12)}t | "
+                    f"🚧 Excavadoras, compactadores, extendedora ({pem_s})")
+        else:
+            return (f"🔧 Redes eléctricas BT, alumbrado, señalización | "
+                    f"🛒 Hormigón, tuberías, áridos | 🚧 Maquinaria urbanización ({pem_s})")
+    
     if "nueva construcción" in pt or "plurifamiliar" in d or "nueva planta" in pt:
         m2 = int(pem/1800) if pem else 0
-        elev = max(1, m2//500) if m2 else 2
-        return (f"🔧 Ascensores ×{elev}, HVAC centralizado, PCI | "
-                f"🛒 Acero ~{int(m2*0.05)}t, hormigón ~{int(m2*0.25)}m³ | "
-                f"🚧 Grúa torre, andamios, plataformas elevadoras")
-    if "industrial" in pt or "nave" in d:
-        m2 = int(pem/500) if pem else 0
-        return (f"🔧 Instal. eléctrica MT, clima industrial, PCI/rociadores | "
-                f"🛒 Perfil metálico {int(m2*0.04)}t, panel sándwich {m2}m², solera | "
-                f"🚧 Grúas, robots demolición, explanación")
+        viviendas = int(m2 / 90) if m2 > 90 else 0
+        if m2 > 1000:
+            ascensores = max(2, m2//600)
+            return (f"🔧 Ascensores ×{ascensores}, HVAC centralizado ~{int(m2*0.08)}kW, "
+                    f"PCI rociadores+BIEs | "
+                    f"🛒 Hormigón HA-25 {int(m2*0.35)}m³, acero B500S {int(m2*0.055)}t, "
+                    f"ladrillo {int(m2*1.2)}m² | "
+                    f"🚧 Grúa torre, andamios, plataformas ({pem_s})")
+        else:
+            return (f"🔧 Instalaciones MEP completas | 🛒 Estructura, cerramientos | "
+                    f"🚧 Maquinaria construcción ({pem_s})")
+    
+    if "industrial" in pt or "nave" in d or "almacén" in d:
+        m2 = int(pem/550) if pem else 0
+        if m2 > 2000:
+            return (f"🔧 Instalación eléctrica MT ~{int(m2*0.12)}kVA, iluminación industrial LED, "
+                    f"PCI rociadores | "
+                    f"🛒 Estructura metálica {int(m2*0.04)}t, panel sándwich {m2}m², "
+                    f"solera hormigón {int(m2*0.15)}m³ | "
+                    f"🚧 Grúas, explanación, pavimentación ({pem_s})")
+        else:
+            return (f"🔧 Instalación eléctrica MT, clima industrial | "
+                    f"🛒 Estructura metálica, cerramiento, solera | "
+                    f"🚧 Maquinaria industrial ({pem_s})")
+    
     if "rehabilitación" in pt or "reforma" in pt:
-        return (f"🔧 Sustitución instalaciones (eléctrica, fontanería, HVAC) | "
-                f"🛒 Aislamiento, carpintería, revestimientos | "
-                f"🚧 Andamios fachada, plataformas tijera")
+        return (f"🔧 Renovación instalaciones (eléctrica BT, fontanería, HVAC) | "
+                f"🛒 Aislamiento térmico, carpintería PVC/aluminio, revestimientos | "
+                f"🚧 Andamios fachada, plataformas tijera ({pem_s})")
+    
     if "licitación" in pt:
-        return (f"🏗️ Licitación {pem_s} — presentar oferta técnica + económica | "
-                f"🚧 Adjudicatario necesitará maquinaria de construcción | "
-                f"🛒 Acordar precios de materiales con ganador")
+        return (f"🏗️ Licitación {pem_s} — consultar pliego técnico para cantidades exactas | "
+                f"🚧 Adjudicatario necesitará: maquinaria según proyecto | "
+                f"🛒 Materiales: ver presupuesto desglosado en pliego")
+    
     if "primera ocupación" in pt:
-        return ("🔧 Revisiones finales, legalización contadores, OCA | "
-                "🛒 Acabados finales: pavimento, pintura, carpintería | "
-                "🚧 Plataformas elevadoras para remates")
-    return (f"🏗️ Proyecto {pem_s} — revisar PDF para detalles técnicos | "
-            "🛒 Materiales según especificaciones del proyecto")
+        return ("🔧 Revisiones finales ITE, legalización instalaciones, OCA | "
+                "🛒 Acabados finales: pavimentos, pintura, carpintería | "
+                "🚧 Plataformas elevadoras, herramientas menores")
+    
+    # Generic fallback with PEM context
+    return (f"🏗️ Proyecto {pem_s} — analizar PDF técnico para especificaciones | "
+            "🔧 Instalaciones según proyecto | 🛒 Materiales según mediciones | "
+            "🚧 Maquinaria según cronograma")
 
 def ai_extract(text, url, pub_date):
     if not USE_AI: return keyword_extract(text, url, pub_date)
@@ -1590,21 +1661,22 @@ def ai_extract(text, url, pub_date):
         client = OpenAI(api_key=OPENAI_API_KEY)
 
         sys_prompt = """You are an elite construction intelligence analyst for Spain.
-You read BOCM (Boletín Oficial de la Comunidad de Madrid) documents to extract actionable leads.
+You read BOCM/BOE documents to extract actionable leads for construction supply companies.
 
 Clients: MEP Installers (elevators/HVAC/fire) | Retail Expansion | Promotores/RE
-         Gran Constructora | Industrial/Logistics | Materials Suppliers
+         Gran Constructora | Industrial/Logistics | Materials Suppliers | Machinery Rental
 
 CRITICAL RULES:
 1. Return ONLY valid JSON — no markdown, no text outside JSON.
 2. If NOT a specific construction project → {"permit_type":"none","confidence":"low"}
 3. Required fields: applicant, address, municipality, permit_type, description,
-   declared_value_eur, date_granted, confidence, lead_score, expediente, phase.
+   declared_value_eur, date_granted, confidence, lead_score, expediente, phase,
+   supplies_needed, profile_fit.
 4. permit_type (exact strings only):
    "urbanización" | "plan especial" | "plan especial / parcial" |
    "obra mayor nueva construcción" | "obra mayor industrial" | "obra mayor rehabilitación" |
    "cambio de uso" | "declaración responsable obra mayor" | "licencia primera ocupación" |
-   "licencia de actividad" | "licitación de obras" | "none"
+   "licencia de actividad" | "licitación de obras" | "contribuciones especiales" | "none"
 5. declared_value_eur: Extract PEM / ICIO base imponible / licitación budget.
    For multi-stage projects: SUM all Etapa PEMs. Hard cap 3,000,000,000. NUMBER or null.
    ICIO base imponible = PEM exactly (Spanish tax law Art. 102 TRLRHL).
@@ -1613,60 +1685,91 @@ CRITICAL RULES:
 7. municipality: Specific Madrid town (e.g. "Getafe","Las Rozas"). NOT "Comunidad de Madrid".
 8. description: ONE sentence, commercially focused. Include: what is built, m² if available,
    location specifics, budget, timeline, commercial opportunity.
-   Examples:
-   "Urbanización Las Tablas Oeste (74ha), Fuencarral-El Pardo — PEM €74M, 2 etapas 24+36 meses"
-   "Nave industrial 12.000m² Polígono Valdemoro — logística, promotor DHL Supply Chain"
-   "Rehab. integral edificio 48 viviendas + garaje, C/López de Hoyos 220, Madrid — PEM €3.2M"
-   "Licitación obras pabellón deportivo Alcalá de Henares — presupuesto €1.8M, 18 meses"
 9. lead_score: 0–100 integer. Large PEM + definitivo approval = 70-85. No PEM + inicial = 25-40.
-10. phase: "definitivo"|"inicial"|"licitacion"|"primera_ocupacion"|"en_tramite"
+10. phase: "definitivo"|"inicial"|"licitacion"|"adjudicacion"|"en_obra"|"primera_ocupacion"|"en_tramite"
 11. confidence: "high" (all fields confirmed) | "medium" | "low"
 
+SUPPLIES NEEDED — ULTRA-DETAILED EXTRACTION (CRITICAL):
+This field is commercially critical. Extract EXACT specifications from the document text.
+DO NOT use generic placeholders. READ the [TABLA_DATOS_FINANCIEROS], [TABLA_PARCELAS], 
+and full PDF text to find:
+
+For URBANIZACIÓN projects, extract:
+- Electrical infrastructure: "Red eléctrica BT 20kV, 4 centros transformación 630kVA, alumbrado público LED 150W"
+- Water/sewer: "Tubería abastecimiento PVC DN200-400mm L=2.4km, colector saneamiento DN500 L=1.8km"
+- Roads: "Pavimentación asfáltica 18.500m², zahorra artificial Z-1 2.200t, bordillos hormigón 3.200ml"
+- Earthworks: "Excavación 45.000m³, relleno compactado 22.000m³"
+- Green areas: "Jardinería 12.000m², sistema riego automatizado"
+
+For NUEVA CONSTRUCCIÓN / EDIFICIOS, extract:
+- Structure: "Hormigón HA-25 850m³, acero corrugado B500S 95t, encofrado 4.200m²"
+- MEP systems: "Ascensores 6 uds (4 pers + 2 carga), HVAC VRF 180kW, PCI rociadores + BIEs"
+- Facades: "Cerramiento ladrillo cara vista 2.800m², carpintería aluminio RPT 420m²"
+- Specifics from tables: "48 viviendas = 48 cocinas, 96 baños, 48 calentadores"
+
+For INDUSTRIAL / NAVES, extract:
+- Structure: "Estructura metálica IPE-400 85t, panel sándwich cubierta 6.500m²"
+- Installations: "Instalación eléctrica MT 1.000kVA, iluminación industrial LED 400W"
+- Floors: "Solera hormigón HA-25 15cm 8.200m², juntas de retracción"
+
+For LICITACIONES, extract from pliego técnico tables:
+- "Ver pliego: [exact quantities from budget tables if present]"
+- "Presupuesto desglosado: [itemized budget if in document]"
+
+ALWAYS check these sections for supply details:
+1. [TABLA_DATOS_FINANCIEROS] — budget breakdown tables
+2. [TABLA_PARCELAS] — surface areas (use to calculate material quantities)
+3. [DATOS_SUPERFICIES] — m² figures (urbanización roads, building footprints)
+4. PDF page text containing: "presupuesto desglosado", "mediciones", "partidas", 
+   "unidades de obra", "materiales", "suministros"
+
+If NO specific quantities found, estimate intelligently:
+- Urbanización: Use total m² × standard rates (e.g., 0.8m³ hormigón per m² road)
+- Building: Use m² construidos × MEP/structure ratios
+- Industrial: Use surface × typical warehouse materials
+
+NEVER output generic text like "Materiales según especificaciones del proyecto".
+ALWAYS include at least 3 specific supply categories with quantities or specifications.
+
+Format: "🔧 [MEP systems] | 🛒 [Materials with quantities] | 🚧 [Machinery needs]"
+
+Example good output:
+"🔧 Red BT 20kV 3 CT-630kVA, alumbrado LED 150W, señalización | 🛒 Hormigón HA-25 2.400m³, 
+tubería PVC DN300 1.8km, zahorra Z-1 850t | 🚧 Excavadora 30t, compactador 12t, extendedora"
+
+Example BAD output (NEVER do this):
+"🏗️ Proyecto €5M — revisar PDF para detalles técnicos | 🛒 Materiales según especificaciones"
+
+PROFILE_FIT — Which client profiles benefit from this project:
+Return an array of matching profiles based on project type:
+- "fcc" — Gran infraestructura: urbanización >€10M, obra civil, licitaciones estado
+- "constructora" — Promotores grandes: edificios plurifamiliares, licitaciones municipales
+- "mep" — Instaladores: edificios con ascensores/HVAC, rehab integral, primera ocupación
+- "industrial" — Naves, almacenes, polígonos industriales, plataformas logísticas
+- "retail" — Locales comerciales, centros comerciales, cambios de uso a terciario
+- "kiloutou" — Alquiler maquinaria: cualquier obra mayor, urbanización, demolición
+- "materiales" — Suministro materiales: urbanización, nueva construcción, rehab
+
+Example: Urbanización €50M → ["fcc", "constructora", "kiloutou", "materiales"]
+Example: Nave 5.000m² → ["industrial", "kiloutou", "materiales"]
+Example: Edificio 40 viviendas → ["constructora", "mep", "materiales"]
+
 DOCUMENT CLASSIFICATION RULES:
-- "contribuciones especiales por la ejecución de obras" → obras CONFIRMED active/complete
-  → permit_type:"contribuciones especiales", phase:"en_obra"
-  → Extract "presupuesto base de licitación" as declared_value_eur (divide by 1.21 if "con IVA")
-  → Lead is highly actionable: exact addresses known, obra is happening NOW
-- "resolución de adjudicación" → contract AWARDED → permit_type from obra type, phase:"adjudicacion"
-  → Extract "importe de adjudicación" as declared_value_eur
-- "acta de recepción de las obras" → project COMPLETE → lower score, flag for follow-up only
-- "anuncio de licitación" from BOE → state-level tender → extract all budget fields
-  → Check if Madrid geography: ADIF, Metro, Hospital, Comunidad de Madrid agencies
-- "se ha SOLICITADO" + "plazo de veinte días" → APPLICATION not grant → permit_type:"none"
-- "aprobar DEFINITIVAMENTE" → FINAL APPROVAL → phase:"definitivo", confidence:"high"
-- "aprobación INICIAL" → first step, public comment follows → phase:"inicial", confidence:"medium"
-- "licitación de obras" → public tender → permit_type:"licitación de obras", phase:"licitacion"
-- "base imponible del ICIO" → CONFIRMED construction, PEM = base imponible exactly
-- "disolución de la junta de compensación" → PROJECT FINISHED → permit_type:"none"
-- "Dejar sin efecto" → CORRECTION of old error, current doc IS valid → keep as lead
-- "declaración responsable de obra mayor" → valid permit since Ley 1/2020 = licencia equivalent
-- Reparcelación/convenio urbanístico/estudio de detalle → early-stage urbanismo → phase:"inicial"
+- "contribuciones especiales por la ejecución de obras" → permit_type:"contribuciones especiales", 
+  phase:"en_obra", profile_fit includes "materiales" and "kiloutou" (obra confirmed active)
+- "resolución de adjudicación" → phase:"adjudicacion" (contract awarded — most actionable)
+- "anuncio de licitación" → phase:"licitacion", profile_fit includes "constructora"
+- "acta de recepción" → project complete (lower priority, mention in ai_evaluation)
+- "aprobación definitiva" + "presupuesto" → phase:"definitivo", confidence:"high"
+- "aprobación inicial" → phase:"inicial", confidence:"medium"
+- "base imponible del ICIO" → PEM = base imponible exactly, confidence:"high"
 
-ai_evaluation RULES (NEVER leave empty):
-- Always 2-3 sentences in Spanish, commercially focused.
-- Sentence 1: What this is commercially (project scale, who benefits).
-- Sentence 2: Specific action + timing ("Contactar a la Junta ANTES de que cierren contratos de obra civil en 6-12 meses").
-- Sentence 3: Risk/caveat or competitive intelligence.
-- Example: "Urbanización definitiva en corredor norte de Madrid con JC ya constituida. Gran Constructora debe pre-calificarse para las futuras licitaciones de obra civil (estimado 2026-2027). Oportunidad directa para instaladores MEP y suministradores de materiales."
+TABLA_DATOS extraction: Extract ALL financial data from [TABLA_DATOS_FINANCIEROS].
+PARCEL DATA: Use [TABLA_PARCELAS] total m² to estimate material quantities.
+OWNER DATA: Extract company names from [DATOS_PROMOTORES_PROPIETARIOS] for applicant field.
 
-profile_fit RULES (add this field):
-- List which profiles benefit: e.g. ["fcc","constructora","mep","kiloutou"]
-- Based on project type: urbanización/licitación → fcc+constructora; obra mayor → mep+compras; industrial → industrial+kiloutou
-
-TABLA_DATOS extraction: If text contains "TABLA_DATOS:", "[TABLA_DATOS_FINANCIEROS]", or "[TABLA_PARCELAS]", extract PEM from those rows.
-declared_value_eur: SUM all "ETAPA X" values. For ICIO: use "BASE IMPONIBLE" value.
-
-PARCEL DATA ([TABLA_PARCELAS]): Use total surface area from parcel table to estimate PEM if not explicitly stated.
-  - Urbanización: total_m2 × 160 €/m²
-  - Industrial: total_m2 × 550 €/m²
-  - Residencial: total_m2 × 1600 €/m² (construido)
-
-OWNER DATA ([DATOS_PROMOTORES_PROPIETARIOS]): Extract company names, CIF codes for the "applicant" field.
-  Do NOT include individual DNI numbers or personal addresses in any output field.
-
-SURFACE DATA ([DATOS_SUPERFICIES]): Use m² or ha figures to estimate declared_value_eur if not found.
-
-If you estimate PEM rather than find it explicitly, set confidence to "medium" and note it in description. """
+If you estimate PEM rather than find it explicitly, set confidence to "medium" and note method.
+"""
 
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -1753,7 +1856,7 @@ HDRS = [
     "Permit Type","Declared Value PEM (€)","Est. Build Value (€)",
     "Maps Link","Description","Source URL","PDF URL",
     "Mode","Confidence","Date Found","Lead Score","Expediente","Phase",
-    "Estimated PEM","AI Evaluation","Supplies Needed",
+    "Estimated PEM","AI Evaluation","Supplies Needed","Profile Fit",
 ]
 _ws             = None
 _seen_urls      = set()
@@ -1826,6 +1929,31 @@ def write_permit(p, pdf_url=""):
         if addr:
             maps = ("https://www.google.com/maps/search/"
                     + (addr + " " + muni + " España").replace(" ","+").replace(",",""))
+            # Format profile_fit as comma-separated string
+        profile_fit = p.get("profile_fit", [])
+        if isinstance(profile_fit, list):
+            profile_fit_str = ", ".join(profile_fit)
+        else:
+            profile_fit_str = str(profile_fit) if profile_fit else ""
+
+        row = [
+            p.get("date_granted",""), muni, addr,
+            p.get("applicant") or "",
+            p.get("permit_type") or "obra mayor",
+            dec or "", est, maps,
+            (p.get("description") or "")[:350],
+            url, pdf_url or "",
+            p.get("extraction_mode","keyword"),
+            p.get("confidence",""),
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+            p.get("lead_score",0),
+            p.get("expediente",""),
+            p.get("phase",""),
+            p.get("estimated_pem",""),
+            (p.get("ai_evaluation") or "")[:500],
+            (p.get("supplies_needed") or "")[:600],  # Increased from 300 to 600
+            profile_fit_str,  # NEW COLUMN
+        ]
 
         row = [
             p.get("date_granted",""), muni, addr,
@@ -2802,46 +2930,53 @@ if MODE in ("weekly", "full") and time_ok(need_s=180):
     log(f"\n{'─'*55}")
     log(f"📰 SOURCE 5: BOE (state licitaciones - XML extraction)")
     
-    # Search BOE for construction licitaciones
-    boe_items = search_boe_construction(date_from, date_to, global_seen)
-    
-    if boe_items:
-        log(f"  Processing {len(boe_items)} BOE items concurrently...")
+    # ── SOURCE 5: BOE (Boletín Oficial del Estado) ───────────────────────────
+        # State-level licitaciones: ADIF, Ministerios, AENA, Comunidad de Madrid
+        # Uses XML extraction (fast, accurate) instead of PDF parsing
+        # Only runs in weekly/full mode (not daily)
         
-        boe_saved = boe_skipped = boe_errors = 0
-        
-        with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
-            boe_futures = {
-                executor.submit(process_boe_item, boe_id, title, dept, idx+1, len(boe_items)): boe_id
-                for idx, (boe_id, title, dept) in enumerate(boe_items)
-                if time_ok(need_s=10)
-            }
+        if MODE in ("weekly", "full") and time_ok(need_s=180):
+            log(f"\n{'─'*55}")
+            log(f"📰 SOURCE 5: BOE (state licitaciones - XML extraction)")
             
-            for future in as_completed(boe_futures):
-                if not time_ok(need_s=10):
-                    for f in boe_futures:
-                        f.cancel()
-                    log(f"  ⏰ BOE processing stopped - time budget")
-                    break
+            # Search BOE for construction licitaciones
+            boe_items = search_boe_construction(date_from, date_to, global_seen)
+            
+            if boe_items:
+                log(f"  Processing {len(boe_items)} BOE items concurrently...")
                 
-                try:
-                    s, sk, e = future.result()
-                    boe_saved += s
-                    boe_skipped += sk
-                    boe_errors += e
-                except Exception as ex:
-                    log(f"  ❌ BOE future error: {ex}")
-                    boe_errors += 1
-        
-        log(f"  BOE results: ✅{boe_saved} saved | ⏭️{boe_skipped} skipped | ❌{boe_errors} errors")
-        
-        # Add to overall totals
-        saved += boe_saved
-        skipped += boe_skipped
-        errors += boe_errors
-    else:
-        log(f"  📰 BOE: No relevant items found in date range")
-"""
+                boe_saved = boe_skipped = boe_errors = 0
+                
+                with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
+                    boe_futures = {
+                        executor.submit(process_boe_item, boe_id, title, dept, idx+1, len(boe_items)): boe_id
+                        for idx, (boe_id, title, dept) in enumerate(boe_items)
+                        if time_ok(need_s=10)
+                    }
+                    
+                    for future in as_completed(boe_futures):
+                        if not time_ok(need_s=10):
+                            for f in boe_futures:
+                                f.cancel()
+                            log(f"  ⏰ BOE processing stopped - time budget")
+                            break
+                        
+                        try:
+                            s, sk, e = future.result()
+                            boe_saved += s
+                            boe_skipped += sk
+                            boe_errors += e
+                        except Exception as ex:
+                            log(f"  ❌ BOE future error: {ex}")
+                            boe_errors += 1
+                
+                log(f"  BOE results: ✅{boe_saved} saved | ⏭️{boe_skipped} skipped | ❌{boe_errors} errors")
+                
+                # Add to overall totals (IMPORTANT!)
+                # Note: We don't add to saved/skipped/errors here because BOE items
+                # are processed separately from the main URL queue
+            else:
+                log(f"  📰 BOE: No relevant items found in date range")
 
     # ── CONCURRENT PROCESSING ────────────────────────────────────────────────────
     saved = skipped = errors = 0
