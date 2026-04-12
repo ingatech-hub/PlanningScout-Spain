@@ -2058,22 +2058,27 @@ def get_sheet():
         log(f"❌ Sheet connection failed: {e}"); return None
 
 def load_seen():
-    """Load seen URLs from Permits tab."""
+    """Load seen URLs from the active sheet tab (Leads) to prevent duplicates."""
     global _seen_urls, _seen_bocm_ids
     ws = get_sheet()
     if not ws: return
     gc = ws.spreadsheet
-    for tab in ["Permits"]:
+    # Read from whichever tab contains data — "Leads" is where write_permit() writes.
+    # Also try legacy "Permits" tab name in case it exists from older runs.
+    for tab in ["Leads", "Permits"]:
         try:
-            for row in gc.worksheet(tab).get_all_values()[1:]:
+            tab_ws = gc.worksheet(tab)
+            for row in tab_ws.get_all_values()[1:]:
                 if len(row) > 9 and row[9].strip():
                     u = row[9].strip()
                     _seen_urls.add(u)
                     bid = extract_bocm_id(u)
                     if bid: _seen_bocm_ids.add(bid)
-        except gspread.WorksheetNotFound: pass
-        except Exception as e: log(f"⚠️  load_seen [{tab}]: {e}")
-    log(f"✅ {len(_seen_urls)} URLs / {len(_seen_bocm_ids)} IDs (Permits)")
+        except gspread.WorksheetNotFound:
+            pass
+        except Exception as e:
+            log(f"⚠️  load_seen [{tab}]: {e}")
+    log(f"✅ {len(_seen_urls)} URLs / {len(_seen_bocm_ids)} IDs loaded (dedup cache)")
 
 def write_permit(p, pdf_url=""):
     ws  = get_sheet()
@@ -2688,6 +2693,62 @@ def run():
             else:
                 log(f"  📰 BOE: No relevant items found in date range")
 
+        # ── Remove already-seen from the collected BOCM queue ──────────────────
+        all_urls = [u for u in all_urls
+                    if u not in _seen_urls and
+                    (not extract_bocm_id(u) or extract_bocm_id(u) not in _seen_bocm_ids)]
+
+        log(f"\n{'═'*55}")
+        log(f"📋 TOTAL: {len(all_urls)} new BOCM URLs to process (elapsed: {elapsed_str()})")
+        log(f"{'═'*55}")
+
+        with open(QUEUE_FILE, "w") as f:
+            json.dump(all_urls, f)
+        log(f"💾 Queue saved — use --resume to restart if interrupted")
+
+    if not all_urls:
+        log("ℹ️  Nothing new.")
+        if today.weekday() == 0: send_digest()
+        return
+
+    # ── CONCURRENT PROCESSING ─────────────────────────────────────────────────
+    saved = skipped = errors = 0
+    log(f"\n{'─'*55}")
+    log(f"⚙️  Processing {len(all_urls)} BOCM URLs with {N_WORKERS} workers…")
+    log(f"{'─'*55}")
+
+    with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
+        futures = {
+            executor.submit(process_one, url, idx+1, len(all_urls)): url
+            for idx, url in enumerate(all_urls)
+            if time_ok(need_s=10)
+        }
+        completed = 0
+        for future in as_completed(futures):
+            if not time_ok(need_s=10):
+                for f in futures:
+                    f.cancel()
+                log(f"\n⏰ Time budget reached — {len(futures)-completed} URLs not processed")
+                log(f"💾 Queue still at {QUEUE_FILE} — re-run with --resume to continue")
+                break
+            try:
+                s, sk, e = future.result()
+                saved += s; skipped += sk; errors += e
+            except Exception as ex:
+                log(f"  ❌ Future error: {ex}"); errors += 1
+            completed += 1
+            if completed % 25 == 0:
+                log(f"  ⚙️  {completed}/{len(all_urls)} | "
+                    f"✅{saved} 💾 ⏭️{skipped} ❌{errors} | {elapsed_str()}")
+
+    log(f"\n{'='*70}")
+    log(f"✅ {saved} saved | {skipped} skipped | {errors} errors | {elapsed_str()}")
+    log(f"📊 Acceptance rate: {100*saved//max(1,saved+skipped+errors)}%")
+    log("=" * 70)
+
+    if os.path.exists(QUEUE_FILE): os.remove(QUEUE_FILE)
+    if today.weekday() == 0: log("\n📧 Monday → digest"); send_digest()
+
 # ──────────────────────────────────────────────────────────────
 # BOE CONFIGURATION
 # ──────────────────────────────────────────────────────────────
@@ -2871,106 +2932,144 @@ def extract_boe_xml_text(boe_id):
 
 def search_boe_construction(date_from, date_to, global_seen):
     """
-    Search BOE for construction/urbanismo licitaciones.
-    
-    Returns list of (boe_id, title, department) tuples.
-    Uses XML extraction instead of PDF parsing.
+    Search BOE for construction/urbanismo/obra-civil licitaciones using the
+    BOE DAILY SUMARIO XML API — structured, reliable, no HTML guessing.
+
+    URL: https://www.boe.es/diario_boe/xml.php?id=BOE-S-YYYYMMDD
+    Returns a structured XML with every item published that day, including
+    section, subsection, title, emisor/department, and BOE ID.
+
+    Targets Section V (Anuncios de licitación) and filters by:
+      - Construction keywords in the title
+      - Relevant departments (ADIF, Ministerio Transportes, Canal Isabel II, etc.)
+
+    Gran Infraestructura (Obra Civil) targets:
+      - ADIF / Adif Alta Velocidad (railway infrastructure)
+      - Ministerio de Transportes y Movilidad Sostenible (roads, airports)
+      - Canal de Isabel II (Madrid water infrastructure)
+      - SEITT / MITMA (motorway concessions)
+      - Dirección General de Carreteras
+      - Comunidad de Madrid (regional infrastructure)
+      - Puertos del Estado (port civil works)
     """
     boe_items = []
     seen_local = set()
-    page = 1
-    max_pages = 10  # Safety limit
-    
-    log(f"  🔍 BOE search: {date_from.strftime('%d/%m/%Y')} → {date_to.strftime('%d/%m/%Y')}")
-    
-    while page <= max_pages:
-        if not time_ok(need_s=30):
-            break
-        
-        search_url = build_boe_search_url(date_from, date_to, page)
-        
+
+    # Build list of working days to scan
+    scan_days = []
+    d = date_from
+    while d <= date_to:
+        if d.weekday() < 5:   # Mon–Fri only (BOE publishes on working days)
+            scan_days.append(d)
+        d += timedelta(days=1)
+
+    log(f"  🔍 BOE Sumario XML: scanning {len(scan_days)} working days")
+
+    # Keywords that identify a construction-relevant document in BOE
+    _CONST_KWS = [
+        "obras", "urbanización", "reparcelación", "construcción",
+        "infraestructura", "saneamiento", "edificación", "rehabilitación",
+        "plan parcial", "plan especial", "licitación obras",
+        "ejecución de obras", "proyecto de urbanización",
+        "obra civil", "infraestructura ferroviaria", "infraestructura viaria",
+        "abastecimiento", "depuración", "pavimentación",
+        "nueva construcción", "reforma", "ampliación",
+        "autovía", "carretera", "túnel", "puente", "viaducto",
+        "línea ferroviaria", "plataforma ferroviaria", "electrificación",
+        "canal", "embalse", "depuradora", "estación depuradora",
+        "puerto deportivo", "puerto comercial",
+        "aeropuerto", "terminal", "pista",
+        "subestación eléctrica", "línea eléctrica",
+        # Gran Infraestructura específico
+        "alta velocidad", "corredor ferroviario", "nave industrial",
+        "polígono industrial", "plataforma logística",
+    ]
+    _EXCL_KWS = [
+        "suministro de", "servicios de limpieza", "servicios de vigilancia",
+        "consultoría", "asistencia técnica", "software", "hardware",
+        "mobiliario", "vehículos", "alimentación", "catering",
+        "seguros", "recogida de residuos", "servicios informáticos",
+        "arrendamiento", "transporte escolar",
+    ]
+    # Departments relevant to Gran Infraestructura + Madrid area
+    _TARGET_DEPTS = [
+        "adif", "alta velocidad", "administrador de infraestructuras",
+        "ministerio de transportes", "ministerio de vivienda",
+        "ministerio para la transición ecológica",
+        "dirección general de carreteras", "dirección general de infraestructuras",
+        "canal de isabel ii", "seitt", "mitma",
+        "comunidad de madrid", "administración local",
+        "ayuntamiento", "mancomunidad", "diputación",
+        "puertos del estado", "autoridad portuaria",
+        "aena", "enaire",
+        "red eléctrica", "endesa", "iberdrola",  # utility infrastructure
+        "confederación hidrográfica",
+    ]
+
+    def _title_ok(title):
+        if not title: return False
+        tl = title.lower()
+        if any(e in tl for e in _EXCL_KWS): return False
+        return any(k in tl for k in _CONST_KWS)
+
+    def _dept_ok(dept):
+        if not dept: return True   # unknown dept → accept, classify later
+        dl = dept.lower()
+        return any(d in dl for d in _TARGET_DEPTS)
+
+    for day in scan_days:
+        if not time_ok(need_s=30): break
+        sumario_id = f"BOE-S-{day.strftime('%Y%m%d')}"
+        xml_url    = f"{BOE_BASE}/diario_boe/xml.php?id={sumario_id}"
         try:
-            r = safe_get(search_url, timeout=25)
+            r = safe_get(xml_url, timeout=20)
             if not r or r.status_code != 200:
-                break
-            
-            soup = BeautifulSoup(r.text, "html.parser")
-            
-            # BOE search results structure:
-            # Results are in <div class="resultado"> or <li class="resultado-busqueda">
-            results = (soup.find_all("div", class_="resultado") or 
-                      soup.find_all("li", class_="resultado-busqueda") or
-                      soup.find_all("div", class_="resultado-busqueda"))
-            
-            if not results:
-                # No more results
-                break
-            
-            found_new = False
-            
-            for result in results:
-                # Extract BOE ID from link
-                link = result.find("a", href=True)
-                if not link:
-                    continue
-                
-                href = link["href"]
-                
-                # Extract BOE-B-YYYY-NNNNN ID
-                boe_id_match = re.search(r'(BOE-[ABCS]-\d{4}-\d+)', href, re.I)
-                if not boe_id_match:
-                    continue
-                
-                boe_id = boe_id_match.group(1).upper()
-                
-                # Skip if already seen
-                if boe_id in seen_local or boe_id in global_seen:
-                    continue
-                
+                continue
+            try:
+                root = ET.fromstring(r.content)
+            except ET.ParseError:
+                continue
+
+            # BOE sumario XML structure:
+            # <sumario> → <diario> → <seccion num="5"> → <departamento>
+            #   → <item id="BOE-B-..."> with <titulo> and info attrs
+            for item in root.iter("item"):
+                boe_id = item.get("id", "")
+                if not boe_id: continue
+                # Only Section V (Anuncios) — id format BOE-B-... or BOE-A-...
+                # Section B = Anuncios de organismos públicos (licitaciones)
+                # Accept BOE-B (anuncios) and BOE-A (disposiciones, for planning docs)
+                if not re.match(r'BOE-[AB]-\d{4}-\d+', boe_id, re.I): continue
+
+                boe_id = boe_id.upper()
+                if boe_id in seen_local or boe_id in global_seen: continue
+
                 # Extract title
-                title_elem = result.find("p", class_="nombre_resultado") or link
-                title = title_elem.get_text(strip=True) if title_elem else ""
-                
-                # Extract department/emisor
-                dept_elem = result.find("p", class_="emisor") or result.find("span", class_="emisor")
-                department = dept_elem.get_text(strip=True) if dept_elem else ""
-                
-                # Filter by title keywords
-                if not filter_by_title(title):
-                    continue
-                
-                # Filter by department (if we can identify it)
-                dept_relevant = False
-                if department:
-                    for target_dept in BOE_DEPARTMENTS:
-                        if target_dept.lower() in department.lower():
-                            dept_relevant = True
-                            break
-                else:
-                    # If no department found in HTML, accept it (we'll check in XML)
-                    dept_relevant = True
-                
-                if not dept_relevant:
-                    continue
-                
-                # Add to results
+                titulo_el = item.find("titulo")
+                title = titulo_el.text.strip() if titulo_el is not None and titulo_el.text else ""
+
+                # Walk up to find the departamento/emisor
+                department = ""
+                for dept_el in root.iter("departamento"):
+                    # Check if this item belongs to this department
+                    if dept_el.find(f".//item[@id='{boe_id}']") is not None:
+                        dept_name_el = dept_el.find("nombre")
+                        if dept_name_el is not None and dept_name_el.text:
+                            department = dept_name_el.text.strip()
+                        break
+
+                # Apply filters
+                if not _title_ok(title): continue
+                if not _dept_ok(department): continue
+
                 seen_local.add(boe_id)
                 boe_items.append((boe_id, title, department))
-                found_new = True
-            
-            # Check for next page
-            next_page = soup.find("a", class_="next") or soup.find("a", string=re.compile(r"Siguiente|»", re.I))
-            if not next_page or not found_new:
-                break
-            
-            page += 1
-            time.sleep(1.5)  # Be polite to BOE servers
-            
+
         except Exception as e:
-            log(f"  ⚠️ BOE page {page} error: {e}")
-            break
-    
-    log(f"  📰 BOE: {len(boe_items)} relevant items found (filtered from search)")
+            log(f"  ⚠️ BOE sumario [{day.strftime('%d/%m')}]: {e}")
+        time.sleep(0.5)
+
+    log(f"  📰 BOE Sumario XML: {len(boe_items)} relevant items found")
     return boe_items
 
 def process_boe_item(boe_id, title, department, idx, total):
@@ -3007,7 +3106,9 @@ def process_boe_item(boe_id, title, department, idx, total):
         
         # Build URL for the document
         html_url = f"{BOE_BASE}/diario_boe/txt.php?id={boe_id}"
-        pdf_url = f"{BOE_BASE}/boe/dias/{boe_id[-4:]}/{boe_id[6:10]}/{boe_id[11:15]}/pdfs/{boe_id}.pdf"
+        # PDF URL requires the publication date — use metadata or leave blank;
+        # html_url (txt.php) always works and is linked from the XML.
+        pdf_url  = f"{BOE_BASE}/diario_boe/xml.php?id={boe_id}"  # XML is reliable
         
         # Extract data
         pub_date = metadata.get("fecha_pub", "") or extract_date_from_url(boe_id)
