@@ -273,7 +273,7 @@ PROFILES = {
     "🚧 Alquiler Maquinaria": {
         "key": "kiloutou",
         "tip": "💡 <strong>Llega al constructor ANTES de que empiece la obra.</strong> Cualquier proyecto >€200K = excavadoras, plataformas elevadoras, robots de demolición.",
-        "min_score": 0, "min_value": 200_000, "days": 90,
+        "min_score": 0, "min_value": 200_000, "days": 60,
         "types": [],
     },
     "🛒 Compras / Materiales": {
@@ -313,7 +313,31 @@ def parse_val(v):
     except Exception:
         return 0.0
 
-def parse_sc(v):
+def parse_est_pem_numeric(text):
+    """
+    Extract the first numeric value from a rich Estimated PEM text string.
+    Handles formats like:
+      'Estimación PEM: €800K–€2.5M · ...'  → 800_000
+      '✅ PEM confirmado: €17,361,664'       → 17_361_664
+      '⚪ Sin datos PEM en BOCM'             → 0
+    Used only for filtering/sorting — display uses the raw text.
+    """
+    if not text or str(text).strip().lower() in ("", "nan", "none"):
+        return 0.0
+    t = str(text)
+    # Millions: €17.4M or €2.5M
+    for m in re.finditer(r'€\s*([\d]+(?:[.,]\d+)?)\s*[Mm]', t):
+        try: return float(m.group(1).replace(',', '.')) * 1_000_000
+        except: pass
+    # Thousands: €800K
+    for m in re.finditer(r'€\s*([\d]+(?:[.,]\d+)?)\s*[Kk]', t):
+        try: return float(m.group(1).replace(',', '.')) * 1_000
+        except: pass
+    # Plain number after €: €17,361,664 or €17.361.664
+    for m in re.finditer(r'€\s*([\d][0-9.,]+)', t):
+        try: return parse_val(m.group(1))
+        except: pass
+    return 0.0
     try:
         return int(float(str(v).strip())) if str(v).strip() else 0
     except Exception:
@@ -337,11 +361,14 @@ def build_card(row):
     All data values are html.escape()'d to prevent broken HTML.
     """
     sc    = parse_sc(row.get("score_raw", 0))
-    pem   = parse_val(row.get("pem_raw", ""))      # declared (col F)
-    pem_e = parse_val(row.get("pem_est_raw", ""))  # estimated (col R)
-    pem_c = pem if pem > 0 else pem_e              # combined for display
+    pem   = parse_val(row.get("pem_raw", ""))         # declared PEM (numeric col F)
+    pem_est_text = str(row.get("pem_est_raw", "") or "").strip()  # raw text from col R
+    pem_e = parse_est_pem_numeric(pem_est_text)        # numeric extraction for sorting only
+    pem_c = pem if pem > 0 else pem_e                  # combined for display of declared
     pem_is_declared  = pem > 0
-    pem_is_estimated = not pem_is_declared and pem_e > 0
+    # Estimated: show when no declared PEM and raw text has meaningful content
+    _est_empty = pem_est_text.lower() in ("", "nan", "none", "⚪ sin datos pem en bocm")
+    pem_is_estimated = not pem_is_declared and bool(pem_est_text) and not _est_empty
     muni  = esc(row.get("municipio", "")) or "Madrid"
     addr  = esc(row.get("direccion", ""))
     prom  = esc(row.get("promotor", ""))
@@ -456,11 +483,21 @@ def build_card(row):
         )
         all_row_data.append(("PEM Declarado", pem_row_val))
     elif pem_is_estimated:
+        # Show the raw text exactly as stored in the sheet (e.g. "Estimación PEM: €800K–€2.5M · ...")
+        _est_display = _html_esc.escape(pem_est_text[:220])
+        _is_confirmed = "✅" in pem_est_text or "confirmado" in pem_est_text.lower()
+        _badge_style = (
+            f"{_FM};font-size:9px;font-weight:600;background:#dbeafe;color:#1e40af;"
+            f"border-radius:4px;padding:2px 6px;letter-spacing:.04em;flex-shrink:0;"
+        ) if _is_confirmed else (
+            f"{_FM};font-size:9px;font-weight:600;background:#fffbeb;color:#b45309;"
+            f"border-radius:4px;border:1px solid #fde68a;padding:2px 6px;letter-spacing:.04em;flex-shrink:0;"
+        )
+        _badge_label = "✓ Confirmado" if _is_confirmed else "⚡ Est. IA"
         pem_row_val = (
-            f'<div style="display:flex;align-items:center;gap:8px;">'
-            f'<span style="{_FH};font-size:17px;font-weight:700;color:#b45309;font-style:italic;">~{pem_s}</span>'
-            f'<span style="{_FM};font-size:9px;font-weight:600;background:#fffbeb;color:#b45309;'
-            f'border-radius:4px;border:1px solid #fde68a;padding:2px 6px;letter-spacing:.04em;">⚡ Est. IA</span>'
+            f'<div style="display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap;">'
+            f'<span style="{_F};font-size:12px;color:#b45309;line-height:1.55;flex:1;">{_est_display}</span>'
+            f'<span style="{_badge_style}">{_badge_label}</span>'
             f'</div>'
         )
         all_row_data.append(("Estimación PEM", pem_row_val))
@@ -648,8 +685,8 @@ if df_raw.empty:
     st.stop()
 
 df = df_raw.rename(columns={k: v for k, v in COL_MAP.items() if k in df_raw.columns})
-df["pem"]          = df["pem_raw"].apply(parse_val)     if "pem_raw"     in df.columns else pd.Series(0.0, index=df.index)
-df["pem_est"]      = df["pem_est_raw"].apply(parse_val) if "pem_est_raw" in df.columns else pd.Series(0.0, index=df.index)
+df["pem"]          = df["pem_raw"].apply(parse_val)                  if "pem_raw"     in df.columns else pd.Series(0.0, index=df.index)
+df["pem_est"]      = df["pem_est_raw"].apply(parse_est_pem_numeric)  if "pem_est_raw" in df.columns else pd.Series(0.0, index=df.index)
 # pem_combined = declared PEM (col F) when present, else estimated (col R).
 # This single field drives the sidebar filter, sort, and metrics.
 df["pem_combined"] = df.apply(lambda r: r["pem"] if r["pem"] > 0 else r["pem_est"], axis=1)
@@ -742,8 +779,8 @@ with st.sidebar:
 
     days_back = st.selectbox(
         "Período",
-        [7, 14, 30, 60, 90, 365],
-        index=([7, 14, 30, 60, 90, 365].index(prof["days"]) if prof["days"] in [7, 14, 30, 60, 90, 365] else 0),
+        [7, 14, 30, 60, 365],
+        index=([7, 14, 30, 60, 365].index(prof["days"]) if prof["days"] in [7, 14, 30, 60, 365] else 0),
         format_func=lambda x: "Todo el historial" if x >= 365 else f"Últimos {x} días",
     )
     min_pem   = st.number_input("PEM mínimo (€)", value=prof["min_value"], min_value=0, step=50_000, format="%d")
@@ -788,7 +825,7 @@ st.markdown(f"""
          color:#0d1a2b;margin:0;line-height:1.2;">{name_part}</h1>
   </div>
   <p style="font-size:13px;color:#64748b;margin:0;font-family:'Plus Jakarta Sans',system-ui,sans-serif;">
-    Últimos {days_back} días &nbsp;·&nbsp; Proyectos detectados del BOCM (Comunidad de Madrid)
+    {"Todo el historial disponible" if days_back >= 365 else f"Últimas {days_back // 7} semanas" if days_back >= 14 else f"Últimos {days_back} días"} &nbsp;·&nbsp; Proyectos detectados del BOCM (Comunidad de Madrid)
   </p>
 </div>""", unsafe_allow_html=True)
 
@@ -820,14 +857,12 @@ count      = len(df_f)
 high_leads = len(df_f[df_f["score"] >= 65])
 avg_score  = int(df_f["score"].mean()) if count > 0 else 0
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2 = st.columns(2)
 for col, (val, lbl, clr) in zip(
-    [c1, c2, c3, c4],
+    [c1, c2],
     [
-        (str(count),         "Proyectos",      "#1e3a5f"),
-        (fmt(total_pem),     "PEM total",       "#1e3a5f"),
-        (str(high_leads),    "🟢 Prioritarios", "#16a34a"),
-        (f"{avg_score} pts", "Score medio",     "#5a5a78"),
+        (str(count),      "Proyectos detectados", "#1e3a5f"),
+        (str(high_leads), "🟢 Prioritarios",      "#16a34a"),
     ]
 ):
     with col:
