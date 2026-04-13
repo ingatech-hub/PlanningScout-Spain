@@ -689,16 +689,38 @@ df["pem"]          = df["pem_raw"].apply(parse_val)                  if "pem_raw
 df["pem_est"]      = df["pem_est_raw"].apply(parse_est_pem_numeric)  if "pem_est_raw" in df.columns else pd.Series(0.0, index=df.index)
 # pem_combined = declared PEM (col F) when present, else estimated (col O)
     # This single field drives the sidebar filter, sort, and metrics.
-# pem_combined = declared PEM (col F) when present, else estimated (col O)
-# This single field drives the sidebar filter, sort, and metrics.
-df["pem_combined"] = df.apply(lambda r: r["pem"] if r["pem"] > 0 else r["pem_estimado"], axis=1)
+# ════════════════════════════════════════════════════════════
+# PROCESAMIENTO DE DATOS (Lógica Unificada)
+# ════════════════════════════════════════════════════════════
 
+# 1. TRADUCCIÓN DE COLUMNAS: Si Google Sheets viene en inglés, lo traducimos
+if "Estimated PEM" in df.columns:
+    df = df.rename(columns={"Estimated PEM": "pem_estimado"})
+
+# 2. PEM COMBINADO: Prioriza PEM real sobre el Estimado
+if "pem" in df.columns and "pem_estimado" in df.columns:
+    df["pem_combined"] = df.apply(lambda r: r["pem"] if r["pem"] > 0 else r["pem_estimado"], axis=1)
+elif "pem" in df.columns:
+    df["pem_combined"] = df["pem"]
+else:
+    df["pem_combined"] = 0
+
+# 3. LIMPIEZA DE SCORE: Función robusta para evitar errores de formato
 def parse_sc(val):
-    if pd.isna(val) or str(val).strip() == "": return 0
-    try: return int(float(str(val).replace(",", ".")))
-    except ValueError: return 0
+    if pd.isna(val) or str(val).strip() == "": 
+        return 0
+    try: 
+        # Esta línea limpia puntos de miles y comas decimales
+        clean_val = str(val).replace(".", "").replace(",", ".").strip()
+        return int(float(clean_val))
+    except Exception: 
+        return 0
 
-df["score"] = df["score_raw"].apply(parse_sc) if "score_raw" in df.columns else pd.Series(0, index=df.index)
+# 4. APLICACIÓN DEL SCORE: Busca la columna original 'score_raw'
+if "score_raw" in df.columns:
+    df["score"] = df["score_raw"].apply(parse_sc)
+else:
+    df["score"] = 0
 
 def _best_date(row):
     """Use the most recent of Date Found and Date Granted.
