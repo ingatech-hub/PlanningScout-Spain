@@ -1136,10 +1136,6 @@ def _estimate_pem_from_pdf(text):
 
     return result
 
-
-def fetch_announcement(url):
-
-
 def fetch_announcement(url):
     """Returns (text, pdf_url, pub_date, doc_title)."""
     url_low = url.lower()
