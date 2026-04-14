@@ -834,7 +834,7 @@ def _fetch_pem_only_from_pdf(pdf_url):
 
         parts = []
         with pdfplumber.open(io.BytesIO(r.content)) as pdf:
-            for pg in pdf.pages[:4]:
+            for pg in pdf.pages[:8]:
                 # Table extraction first (PEM often in summary table)
                 for tbl in (pg.extract_tables() or []):
                     for row in (tbl or []):
@@ -859,12 +859,39 @@ def _fetch_pem_only_from_pdf(pdf_url):
         return ""
 
 def _estimate_pem_from_pdf(text):
-    """Estimate PEM from m2, viviendas, land-use. Rates: Spanish ICIO 2024-2025."""
-    t = text.lower()
-    result = {"estimated_pem": None, "method": "", "basis": "", "confidence": "low"}
-    total_m2 = 0.0; num_units = 0
+    """
+    Estimate PEM range from PDF/BOCM text using extracted m², floors, units, use type,
+    and 2024-2025 Spanish construction reference rates (COAM / Colegio Aparejadores Madrid).
 
-    # From TABLA_SUPERFICIES / TABLA_PARCELAS markers
+    Returns a dict with:
+      estimated_pem       — midpoint for scoring/filtering (unchanged API)
+      estimated_pem_low   — low end of range
+      estimated_pem_high  — high end of range
+      method, basis, confidence
+    """
+    t = text.lower()
+
+    # ── Helpers ──────────────────────────────────────────────────────────────
+    def _fmtp(v):
+        if v >= 1_000_000: return f"€{v/1_000_000:.1f}M"
+        if v >= 1_000:     return f"€{int(v/1000)}K"
+        return f"€{int(v):,}"
+
+    result = {
+        "estimated_pem": None, "estimated_pem_low": None, "estimated_pem_high": None,
+        "method": "", "basis": "", "confidence": "low",
+    }
+
+    total_m2  = 0.0   # plot / sector surface
+    built_m2  = 0.0   # above-ground constructed surface (preferred for building calc)
+    garage_m2 = 0.0   # underground parking / sótano
+    num_units = 0     # viviendas
+    n_plantas = 0     # floors above ground
+    plazas_garaje = 0 # parking spaces
+
+    # ── STEP 1: Extract surface areas ─────────────────────────────────────────
+
+    # From structured table markers (most reliable)
     for marker in ["tabla_superficies:", "tabla_parcelas:", "[tabla_parcelas]"]:
         if marker in t:
             block = text.split(marker, 1)[1].split("\n\n")[0]
@@ -873,67 +900,244 @@ def _estimate_pem_from_pdf(text):
                 v = _parse_euro(tot.group(1))
                 if v and 100 < v < 10_000_000: total_m2 = v
             if not total_m2:
-                for vs in re.findall(r"(?:suelo|parcela|finca)[^\n]*?([0-9]{1,3}(?:[.,][0-9]{3})*,[0-9]{2})", block, re.I):
+                for vs in re.findall(
+                        r"(?:suelo|parcela|finca)[^\n]*?([0-9]{1,3}(?:[.,][0-9]{3})*,[0-9]{2})", block, re.I):
                     v = _parse_euro(vs)
                     if v and 50 < v < 200_000: total_m2 += v
             break
 
-    # Inline surface mentions
+    # Built / constructed surface (most accurate for building PEM)
+    for pat in [
+        r"superficie\s+(?:total\s+)?constru[íi]da[^\d]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*m[2²]",
+        r"superficie\s+edificable[^\d]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*m[2²]",
+        r"edificabilidad[^\d]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*m[2²]",
+        r"techo\s+edificable[^\d]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*m[2²]",
+        r"metros\s+cuadrados?\s+(?:construidos?|de\s+construcci[oó]n)[^\d]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)",
+    ]:
+        mm = re.search(pat, t, re.I)
+        if mm:
+            v = _parse_euro(mm.group(1))
+            if v and 50 < v < 500_000: built_m2 = v; break
+
+    # Total surface / sector / plot
     if not total_m2:
         for pat, is_ha in [
             (r"superficie\s+total[^\d]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*m[2²]", False),
-            (r"([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*m[2²]\s+(?:de\s+)?(?:superficie|suelo)", False),
-            (r"([0-9]+(?:[.,][0-9]+)?)\s*(?:ha|hectáreas)", True),
+            (r"([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*m[2²]\s+(?:de\s+)?(?:superficie|suelo|sector)", False),
+            (r"([0-9]+(?:[.,][0-9]+)?)\s*(?:ha|hect[aá]reas?)", True),
+            (r"sector[^\d]{1,30}([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*m[2²]", False),
+            (r"([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*m[2²]\s+de\s+(?:suelo|terreno|parcela)", False),
+            (r"parcela\s+de\s+([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*m[2²]", False),
         ]:
-            m = re.search(pat, t, re.I)
-            if m:
-                v = _parse_euro(m.group(1))
-                if is_ha and v and v < 2000: v = v * 10_000
-                if v and 100 < v < 10_000_000: total_m2 = v; break
+            mm = re.search(pat, t, re.I)
+            if mm:
+                v = _parse_euro(mm.group(1))
+                if is_ha and v and v < 5000: v = v * 10_000
+                if v and 100 < v < 20_000_000: total_m2 = v; break
 
-    # Viviendas count
-    if not total_m2:
-        for pat in [r"([0-9]+)\s*viviendas", r"([0-9]+)\s*unidades\s+(?:de\s+)?vivienda",
-                    r"edificabilidad[^\d]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*m[2²]"]:
-            m = re.search(pat, t, re.I)
-            if m:
-                try:
-                    v = float(re.sub(r"[^\d]","",m.group(1)))
-                    if "edificabilidad" in pat: total_m2 = max(total_m2, v)
-                    elif v > 0: num_units = int(v)
-                except: pass
-                break
+    # Underground parking / garage surface
+    for pat in [
+        r"s[oó]tano[^\d]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*m[2²]",
+        r"garaje[^\d]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*m[2²]",
+        r"aparcamiento[^\d]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)\s*m[2²]",
+    ]:
+        mm = re.search(pat, t, re.I)
+        if mm:
+            v = _parse_euro(mm.group(1))
+            if v and 100 < v < 50_000: garage_m2 = v; break
 
-    # Land use
-    is_cons    = any(k in t for k in ["entidad de conservaci", "conservación de obras"])
-    is_rep_only = (any(k in t for k in ["reparcelación"]) and
-                   not any(k in t for k in ["proyecto de urbanización","obras de urbanización"]))
-    is_urb     = any(k in t for k in ["proyecto de urbanización","obras de urbanización"])
-    use        = ("industrial" if any(k in t for k in ["industrial","logístico","almacén"])
-                  else "comercial" if any(k in t for k in ["terciario","comercial","hotel"])
-                  else "residencial")
+    # ── STEP 2: Extract floor count ───────────────────────────────────────────
+    for pat in [
+        r"([0-9]+)\s*plantas?\s+(?:sobre\s+rasante|sobre\s+la\s+rasante|de\s+altura)",
+        r"([0-9]+)\s*(?:alturas?|pisos?|niveles?)\s+(?:sobre\s+rasante)",
+        r"planta\s+baja\s+(?:m[aá]s\s+)?([0-9]+)",
+        r"\bb\s*\+\s*([0-9]+)\b",
+        r"([0-9]+)\s*pp\b",
+    ]:
+        mm = re.search(pat, t, re.I)
+        if mm:
+            try:
+                v = int(mm.group(1))
+                if 0 < v <= 40: n_plantas = v; break
+            except: pass
 
-    if total_m2 > 100:
-        if is_cons:
-            result = {"estimated_pem":round(total_m2*8,-2),"method":"conservación",
-                      "basis":f"{total_m2:,.0f}m²","confidence":"low"}
-        elif is_rep_only:
-            result = {"estimated_pem":round(total_m2*25,-2),"method":"reparcelación",
-                      "basis":f"{total_m2:,.0f}m²","confidence":"low"}
-        elif use == "industrial":
-            result = {"estimated_pem":round(total_m2*100,-3),"method":"urbanización industrial",
-                      "basis":f"{total_m2:,.0f}m²","confidence":"medium"}
+    # ── STEP 3: Extract viviendas and parking spaces ──────────────────────────
+    for pat in [
+        r"([0-9]+)\s*viviendas",
+        r"([0-9]+)\s*unidades?\s+(?:de\s+)?vivienda",
+        r"([0-9]+)\s*(?:pisos|apartamentos|d[úu]plex)",
+    ]:
+        mm = re.search(pat, t, re.I)
+        if mm:
+            try:
+                v = int(mm.group(1))
+                if 0 < v < 5000: num_units = v; break
+            except: pass
+
+    for pat in [r"([0-9]+)\s*plazas?\s+(?:de\s+)?(?:garaje|aparcamiento|parking)"]:
+        mm = re.search(pat, t, re.I)
+        if mm:
+            try: plazas_garaje = int(mm.group(1))
+            except: pass
+
+    # ── STEP 4: Classify use type ─────────────────────────────────────────────
+    is_data_center    = any(k in t for k in ["data center","centro de datos","cpd ","procesamiento de datos"])
+    is_hotel          = any(k in t for k in ["hotel ","hotelero","hospedaje","habitaciones hotel","establecimiento hotelero"])
+    is_office         = any(k in t for k in ["edificio de oficinas","uso oficinas","edificio terciario","oficinas de"])
+    is_retail_large   = any(k in t for k in ["gran superficie","centro comercial","hipermercado","galería comercial"])
+    is_vpo            = any(k in t for k in ["vivienda protegida","vpo ","vpa ","viviendas de protección",
+                                              "protección oficial","precio tasado","renta básica"])
+    is_rehab_energ    = any(k in t for k in ["rehabilitación energética","eficiencia energética",
+                                              "aislamiento térmico","fondos next generation",
+                                              "plan de recuperación","actuación de rehabilitación"])
+    is_rehab_integral = (any(k in t for k in ["rehabilitación integral","reforma integral","rehabilitación de edificio"])
+                         and not is_rehab_energ)
+    is_industrial_log = any(k in t for k in ["logístico","plataforma logística","centro de distribución",
+                                              "almacén logístico","hub logístico","cross-docking"])
+    is_industrial     = (any(k in t for k in ["industrial","nave industrial","almacén","polígono",
+                                               "actividades productivas","uso industrial"])
+                         and not is_industrial_log)
+    is_cons_entity    = any(k in t for k in ["entidad de conservaci","conservación de obras","mantenimiento de viales"])
+    is_reparc_only    = (any(k in t for k in ["reparcelación","junta de compensación"]) and
+                         not any(k in t for k in ["proyecto de urbanización","obras de urbanización","obra mayor"]))
+    is_urb_ind        = (any(k in t for k in ["proyecto de urbanización","obras de urbanización","urbanización"]) and
+                         any(k in t for k in ["industrial","polígono","logístico"]))
+    is_urb_res        = (any(k in t for k in ["proyecto de urbanización","obras de urbanización","urbanización"])
+                         and not is_urb_ind)
+    is_residencial    = any(k in t for k in ["viviendas","plurifamiliar","unifamiliar","residencial"])
+    is_comercial      = any(k in t for k in ["comercial","terciario","local comercial","uso comercial"])
+
+    # ── STEP 5: Determine calculation base ────────────────────────────────────
+    # Prefer above-ground built_m2 for building PEM; use total_m2 for urbanisation
+    calc_m2 = 0.0
+    m2_label = ""
+
+    if built_m2 > 100:
+        calc_m2 = built_m2
+        m2_label = f"{built_m2:,.0f}m² constru."
+    elif total_m2 > 100 and n_plantas > 0:
+        calc_m2 = total_m2 * n_plantas * 0.65   # 65% occupation ratio
+        m2_label = f"{total_m2:,.0f}m²suelo×{n_plantas}pl"
+    elif total_m2 > 100:
+        calc_m2 = total_m2
+        m2_label = f"{total_m2:,.0f}m²"
+    elif num_units > 0:
+        calc_m2 = num_units * 92.0              # avg 92m²/vivienda Spain
+        m2_label = f"{num_units}viv×92m²"
+
+    # Underground parking adds value at ~350€/m² (or ~25K€/plaza)
+    garage_pem = 0.0
+    if garage_m2 > 100:
+        garage_pem = garage_m2 * 350.0
+    elif plazas_garaje > 0:
+        garage_pem = plazas_garaje * 22_000.0
+
+    # ── STEP 6: Apply 2024-2025 reference rates (range) ──────────────────────
+    # Sources: COAM, Colegio Aparejadores Madrid, Ministerio de Vivienda módulos autonómicos
+    lo = hi = 0.0
+    method = ""
+    confidence = "low"
+
+    if calc_m2 > 50:
+        if is_data_center:
+            lo, hi = calc_m2 * 3_500, calc_m2 * 6_000
+            method = f"data center (3.500–6.000€/m²)"; confidence = "medium"
+        elif is_hotel:
+            lo, hi = calc_m2 * 1_400, calc_m2 * 2_500
+            method = f"hotel (1.400–2.500€/m²)"; confidence = "medium"
+        elif is_office:
+            lo, hi = calc_m2 * 1_100, calc_m2 * 1_800
+            method = f"oficinas (1.100–1.800€/m²)"; confidence = "medium"
+        elif is_retail_large:
+            lo, hi = calc_m2 * 850, calc_m2 * 1_200
+            method = f"gran superficie (850–1.200€/m²)"; confidence = "medium"
+        elif is_rehab_energ:
+            lo, hi = calc_m2 * 120, calc_m2 * 420
+            method = f"rehab. energética (120–420€/m²)"; confidence = "low"
+        elif is_rehab_integral:
+            lo, hi = calc_m2 * 550, calc_m2 * 1_050
+            method = f"rehab. integral (550–1.050€/m²)"; confidence = "medium"
+        elif is_industrial_log:
+            lo, hi = calc_m2 * 480, calc_m2 * 720
+            method = f"logístico (480–720€/m²)"; confidence = "medium"
+        elif is_industrial:
+            lo, hi = calc_m2 * 400, calc_m2 * 650
+            method = f"industrial (400–650€/m²)"; confidence = "medium"
+        elif is_urb_ind:
+            lo, hi = calc_m2 * 75, calc_m2 * 145
+            method = f"urb. industrial (75–145€/m²)"; confidence = "medium"
+        elif is_urb_res:
+            lo, hi = calc_m2 * 110, calc_m2 * 210
+            method = f"urb. residencial (110–210€/m²)"; confidence = "medium"
+        elif is_reparc_only:
+            lo, hi = calc_m2 * 18, calc_m2 * 38
+            method = f"reparcelación (18–38€/m²)"; confidence = "low"
+        elif is_cons_entity:
+            lo, hi = calc_m2 * 5, calc_m2 * 15
+            method = f"conservación (5–15€/m²)"; confidence = "low"
+        elif is_vpo:
+            # VPO: Comunidad de Madrid módulo 2024 ≈ 980€/m² (capped by CM)
+            lo, hi = calc_m2 * 880, calc_m2 * 1_050
+            method = f"VPO Madrid (880–1.050€/m²)"; confidence = "medium"
+        elif is_residencial:
+            # Residential libre, Madrid metro area 2024-2025
+            lo, hi = calc_m2 * 1_150, calc_m2 * 1_650
+            method = f"residencial libre (1.150–1.650€/m²)"; confidence = "medium"
+        elif is_comercial:
+            lo, hi = calc_m2 * 780, calc_m2 * 1_150
+            method = f"comercial (780–1.150€/m²)"; confidence = "low"
         else:
-            rate = 200 if total_m2<5_000 else 165 if total_m2<20_000 else 145 if total_m2<50_000 else 120
-            result = {"estimated_pem":round(total_m2*rate,-3),
-                      "method":f"urbanización {use} ({rate}€/m²)",
-                      "basis":f"{total_m2:,.0f}m²",
-                      "confidence":"medium" if is_urb else "low"}
-    elif num_units > 0 and use == "residencial":
-        cp = 1_600 * 90
-        result = {"estimated_pem":round(num_units*cp,-3),"method":f"residencial {num_units} viv",
-                  "basis":f"{num_units}×{cp//1000}K€","confidence":"low"}
+            # Generic — wide uncertainty
+            lo, hi = calc_m2 * 850, calc_m2 * 1_450
+            method = f"construcción genérica (850–1.450€/m²)"; confidence = "low"
+
+        # Add underground parking contribution
+        lo += garage_pem * 0.8
+        hi += garage_pem * 1.2
+
+        # Round to meaningful precision
+        rnd = -4 if hi > 10_000_000 else -3
+        lo = round(lo, rnd)
+        hi = round(hi, rnd)
+
+        if lo > 0 and hi > lo:
+            midpoint = round((lo + hi) / 2, rnd)
+            basis_str = m2_label
+            if plazas_garaje: basis_str += f" +{plazas_garaje}pz garaje"
+            result = {
+                "estimated_pem":      midpoint,
+                "estimated_pem_low":  lo,
+                "estimated_pem_high": hi,
+                "method":             method,
+                "basis":              basis_str,
+                "confidence":         confidence,
+            }
+
+    elif num_units > 0:
+        # Unit-based fallback (no m² found anywhere)
+        m2_unit = 92.0
+        if is_vpo:
+            lo = round(num_units * m2_unit * 880, -3)
+            hi = round(num_units * m2_unit * 1_050, -3)
+            method = f"VPO ({num_units} viv × {m2_unit:.0f}m²)"
+        else:
+            lo = round(num_units * m2_unit * 1_150, -3)
+            hi = round(num_units * m2_unit * 1_650, -3)
+            method = f"residencial libre ({num_units} viv × {m2_unit:.0f}m²)"
+        midpoint = round((lo + hi) / 2, -3)
+        result = {
+            "estimated_pem":      midpoint,
+            "estimated_pem_low":  lo,
+            "estimated_pem_high": hi,
+            "method":             method,
+            "basis":              f"{num_units} viviendas",
+            "confidence":         "low",
+        }
+
     return result
+
+
+def fetch_announcement(url):
 
 
 def fetch_announcement(url):
@@ -1254,9 +1458,17 @@ def classify_permit(text):
         "plan parcial","bloque de viviendas","junta de compensación",
         "licitación de obras","base imponible"])
     if not has_major:
+        # Only reject small activity if no significant surface area is declared.
+        # A chain restaurant/bar/retail expansion with declared m² passes through to Tier-4c.
+        _has_surface = bool(re.search(r'([0-9]{2,})\s*m[2²]', t))
+        _surface_val = 0.0
+        if _has_surface:
+            _m = re.search(r'([0-9]{1,4}(?:[.,][0-9]{1,3})?)\s*m[2²]', t)
+            try: _surface_val = float(_m.group(1).replace(',','.')) if _m else 0.0
+            except: pass
         for kw in SMALL_ACTIVITY:
-            if kw in t: return False, f"Small activity: '{kw}'", 0
-
+            if kw in t and _surface_val < 150:
+                return False, f"Small activity (surface <150m²): '{kw}'", 0
     # Tier classification
     if any(p in t for p in ["proyecto de urbanización","junta de compensación",
                              "reparcelación","plan parcial","aprobación definitiva del plan"]):
@@ -2021,7 +2233,7 @@ HDRS = [
     "Permit Type","Declared Value PEM (€)","Est. Build Value (€)",
     "Maps Link","Description","Source URL","PDF URL",
     "Mode","Confidence","Date Found","Lead Score","Expediente","Phase",
-    "Estimated PEM","AI Evaluation","Supplies Needed","Profile Fit",
+    "Estimated PEM","AI Evaluation","Supplies Needed","Profile Fit","Fuente",
 ]
 _ws             = None
 _seen_urls      = set()
@@ -2091,7 +2303,8 @@ def write_permit(p, pdf_url=""):
         if url in _seen_urls:
             return False
 
-        dec  = p.get("declared_value_eur")
+        dec   = p.get("declared_value_eur")
+        fuente = "BOE" if "boe.es" in (url or "").lower() else "BOCM"
         est  = round(dec/0.03) if dec and isinstance(dec,(int,float)) and dec > 0 else ""
         addr = p.get("address") or ""
         muni = p.get("municipality") or "Madrid"
@@ -2122,7 +2335,8 @@ def write_permit(p, pdf_url=""):
             p.get("estimated_pem",""),
             (p.get("ai_evaluation") or "")[:500],
             (p.get("supplies_needed") or "")[:600],  # Increased from 300 to 600
-            profile_fit_str,  # NEW COLUMN
+            profile_fit_str,  # Profile Fit column
+            fuente,           # Fuente: BOCM or BOE — for filtering in sheet
         ]
 
         try:
@@ -2753,7 +2967,6 @@ def run():
 # BOE CONFIGURATION
 # ──────────────────────────────────────────────────────────────
 
-BOE_BASE = "https://www.boe.es"
 BOE_SEARCH_URL = "https://www.boe.es/buscar/boe.php"
 
 # Target departments (Departamento/Emisor codes)
@@ -3149,7 +3362,15 @@ def process_boe_item(boe_id, title, department, idx, total):
                     ep = est_result["estimated_pem"]
                     mth = est_result.get("method", "estimación")
                     bas = est_result.get("basis", "")
-                    p["estimated_pem"] = f"Estimación PEM (BOE): €{ep:,.0f} ({mth}; {bas})"
+                    ep_lo = est_result.get("estimated_pem_low")
+                    ep_hi = est_result.get("estimated_pem_high")
+                    def _fpb(v):
+                        if v >= 1_000_000: return f"€{v/1_000_000:.1f}M"
+                        if v >= 1_000: return f"€{int(v/1000)}K"
+                        return f"€{int(v):,}"
+                    pem_rng_b = (f"{_fpb(ep_lo)}–{_fpb(ep_hi)}" if ep_lo and ep_hi
+                                 else f"€{ep:,.0f}")
+                    p["estimated_pem"] = f"Estimación PEM (BOE): {pem_rng_b} ({mth}; {bas})"
                     if not dec:
                         p["declared_value_eur"] = ep
                         p["lead_score"] = score_lead(p)
