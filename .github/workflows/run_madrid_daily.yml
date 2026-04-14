@@ -29,4 +29,4 @@ jobs:
           GMAIL_APP_PASSWORD:       ${{ secrets.GMAIL_APP_PASSWORD }}
           GMAIL_TO_DEMO_MADRID:     ${{ secrets.GMAIL_TO_DEMO_MADRID }}
         run: |
-          python core/engine.py --client clients/demo_madrid.json --weeks 1
+          python core/engine.py --client clients/demo_madrid.json --weeks 2
