@@ -173,6 +173,71 @@ footer { visibility: hidden; }
         padding-top: 14px !important;
     }
 }
+
+/* ── DARK MODE ───────────────────────────────────────────────────────────────
+   Fires only when the user's OS/browser is set to dark mode.
+   Targets the Streamlit chrome (toolbar, sidebar, app shell) — not the cards,
+   which use inline styles and intentionally stay light (white cards on dark
+   background is standard dark-mode UI, same as Notion / Linear / Vercel).
+────────────────────────────────────────────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+
+    /* App background */
+    .stApp { background: #0f1724 !important; }
+
+    /* Top toolbar — the white bar that looks broken in dark mode */
+    header[data-testid="stHeader"] {
+        background: #1a2535 !important;
+        border-bottom: 1px solid #2d3f55 !important;
+    }
+    header[data-testid="stHeader"] button,
+    header[data-testid="stHeader"] a {
+        color: #94a3b8 !important;
+    }
+    header[data-testid="stHeader"] button:hover {
+        background: rgba(255,255,255,0.08) !important;
+        color: #e2e8f0 !important;
+    }
+
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background: #1a2535 !important;
+        border-right: 1px solid #2d3f55 !important;
+    }
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] .stRadio > div label span {
+        color: #cbd5e1 !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
+        color: #94a3b8 !important;
+    }
+
+    /* Dropdowns, number inputs */
+    .stSelectbox > div > div,
+    .stNumberInput > div > div > input {
+        background: #1a2535 !important;
+        color: #e2e8f0 !important;
+        border-color: #2d3f55 !important;
+    }
+
+    /* Buttons */
+    .stButton button {
+        background: #1a2535 !important;
+        color: #cbd5e1 !important;
+        border-color: #2d3f55 !important;
+    }
+    .stButton button:hover {
+        border-color: #4a8ec2 !important;
+        color: #e2e8f0 !important;
+    }
+    .stDownloadButton button {
+        background: #1a2535 !important;
+        color: #93c5fd !important;
+        border-color: #2d3f55 !important;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
