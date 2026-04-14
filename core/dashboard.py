@@ -403,10 +403,6 @@ def parse_est_pem_numeric(text):
         try: return parse_val(m.group(1))
         except: pass
     return 0.0
-    try:
-        return int(float(str(v).strip())) if str(v).strip() else 0
-    except Exception:
-        return 0
 
 def fmt(v):
     if v == 0:    return "—"
@@ -752,19 +748,10 @@ if df_raw.empty:
 df = df_raw.rename(columns={k: v for k, v in COL_MAP.items() if k in df_raw.columns})
 df["pem"]          = df["pem_raw"].apply(parse_val)                  if "pem_raw"     in df.columns else pd.Series(0.0, index=df.index)
 df["pem_est"]      = df["pem_est_raw"].apply(parse_est_pem_numeric)  if "pem_est_raw" in df.columns else pd.Series(0.0, index=df.index)
-# pem_combined = declared PEM (col F) when present, else estimated (col O)
-    # This single field drives the sidebar filter, sort, and metrics.
-# ════════════════════════════════════════════════════════════
-# PROCESAMIENTO DE DATOS (Lógica Unificada)
-# ════════════════════════════════════════════════════════════
-
-# 1. TRADUCCIÓN DE COLUMNAS: Si Google Sheets viene en inglés, lo traducimos
-if "Estimated PEM" in df.columns:
-    df = df.rename(columns={"Estimated PEM": "pem_estimado"})
-
-# 2. PEM COMBINADO: Prioriza PEM real sobre el Estimado
-if "pem" in df.columns and "pem_estimado" in df.columns:
-    df["pem_combined"] = df.apply(lambda r: r["pem"] if r["pem"] > 0 else r["pem_estimado"], axis=1)
+# pem_combined: declared PEM if > 0, else AI-estimated PEM
+# pem_est was computed above from pem_est_raw column
+if "pem" in df.columns and "pem_est" in df.columns:
+    df["pem_combined"] = df.apply(lambda r: r["pem"] if r["pem"] > 0 else r["pem_est"], axis=1)
 elif "pem" in df.columns:
     df["pem_combined"] = df["pem"]
 else:
@@ -811,10 +798,7 @@ all_munis = sorted([
 ])
 
 profile_names = list(PROFILES.keys())
-default_idx   = len(profile_names) - 1  # Vista General
-is_locked     = False
-
-default_idx   = len(profile_names) - 1  # Vista General
+default_idx   = len(profile_names) - 1  # Vista General fallback
 is_locked     = False
 
 if forced_profile_key:
