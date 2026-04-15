@@ -245,10 +245,6 @@ header[data-testid="stHeader"] { display: none !important; }
   <div style="display:inline-flex;align-items:center;margin-top:12px;
        background:rgba(200,134,10,.07);border:1px solid rgba(200,134,10,.25);
        border-radius:100px;padding:4px 14px;">
-    <span style="font-family:'JetBrains Mono',monospace;font-size:10px;
-          font-weight:600;color:#c8860a;letter-spacing:.07em;">
-      &#10022; ACCESO ANTICIPADO &middot; SELECTIVO
-    </span>
   </div>
   <h2 style="font-family:'Fraunces',Georgia,serif;font-size:22px;font-weight:700;
        color:#0d1a2b;margin:14px 0 5px;">Tu radar de proyectos</h2>
