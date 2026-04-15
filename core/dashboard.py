@@ -170,15 +170,23 @@ if url_token and url_token in client_tokens:
 
 # ── Login gate: show branded form if not yet authenticated ──
 if not st.session_state["authenticated"]:
-    # Load users: Google Sheets "Users" tab first, st.secrets["users"] as fallback
-    _sheet_u, _sheet_perfs = load_users_from_sheet()
-    _secret_u = {}
+    # Passwords come from [users] in secrets (and Google Sheets as secondary fallback)
+    _sheet_u, _ = load_users_from_sheet()   # sheet is secondary fallback only
+    _secret_u   = {}
     try:
         _su = st.secrets.get("users", {})
-        _secret_u = dict(_su) if _su else {}
+        _secret_u = {k.strip().lower(): v for k, v in dict(_su).items()} if _su else {}
     except Exception:
         pass
-    _users = {**_secret_u, **_sheet_u}   # sheet overrides secrets for same email
+    _users = {**_sheet_u, **_secret_u}   # secrets override sheet for same email
+
+    # Profiles come from [profiles] in secrets — this is the authoritative source
+    _secret_profiles: dict = {}
+    try:
+        _pr = st.secrets.get("profiles", {})
+        _secret_profiles = {k.strip().lower(): str(v).strip() for k, v in dict(_pr).items()} if _pr else {}
+    except Exception:
+        pass
 
     # Login-page CSS: block-container IS the card — one unified white box, no second container
     st.markdown("""
@@ -262,40 +270,22 @@ header[data-testid="stHeader"] { display: none !important; }
 <div style="height:1px;background:#edf0f4;margin:0 0 24px;"></div>
 """, unsafe_allow_html=True)
 
-    # Sector options for fallback (used when no perfil is stored in the Users sheet)
-    _SECTOR_OPTS = {
-        "":             "— Seleccionar sector —",
-        "instaladores": "🔧 Instaladores MEP",
-        "expansion":    "🏪 Expansión Retail",
-        "promotores":   "📐 Promotores / RE",
-        "constructora": "🏢 Gran Constructora",
-        "infrastructura": "🏗️ Gran Infraestructura",
-        "industrial":   "🏭 Industrial / Logística",
-        "alquiler":     "🚧 Alquiler Maquinaria",
-        "compras":      "🛒 Compras / Materiales",
-    }
+    # Login form — email + password only. Profile is set by Inga in [profiles] secrets.
     with st.form("login_form"):
-        _email_in   = st.text_input("Email profesional", placeholder="tu@empresa.com")
-        _pass_in    = st.text_input("Contraseña", type="password", placeholder="••••••••")
-        _sector_sel = st.selectbox(
-            "(Opcional)",
-            options=list(_SECTOR_OPTS.keys()),
-            format_func=lambda k: _SECTOR_OPTS[k],
-            key="login_sector_sel",
-        )
-        _submit = st.form_submit_button("Acceder al radar →", use_container_width=True)
+        _email_in = st.text_input("Email profesional", placeholder="tu@empresa.com")
+        _pass_in  = st.text_input("Contraseña", type="password", placeholder="••••••••")
+        _submit   = st.form_submit_button("Acceder al radar →", use_container_width=True)
 
     if _submit:
         _e = _email_in.strip().lower()
         _p = _pass_in.strip()
         if _e in _users and _users[_e] == _p:
+            # Profile is ALWAYS read from [profiles] in secrets — not from the user
+            _assigned = _secret_profiles.get(_e, "general")
             st.session_state["authenticated"] = True
             st.session_state["user_email"]    = _e
             st.session_state["login_error"]   = ""
-            # Server-side profile (sheet col D) takes priority over login dropdown.
-            # This is device/browser-independent — works anywhere.
-            _resolved_perf = _sheet_perfs.get(_e, "") or _sector_sel or ""
-            st.session_state["user_perfil"] = _resolved_perf
+            st.session_state["user_perfil"]   = _assigned
             log_activity(_e, "login")
             st.rerun()
         else:
@@ -325,19 +315,21 @@ header[data-testid="stHeader"] { display: none !important; }
 
     st.stop()
 
-# ── After successful auth: resolve profile ──
-# Token URL locks the profile; email login leaves it free.
-forced_profile_key = None
+# ── After successful auth: resolve profile ──────────────────────────────────
+# Rules:
+#   Token URL → profile from client_tokens, profile selector VISIBLE (Inga's admin view)
+#   Email login → ALWAYS use session_state["user_perfil"] set at login from [profiles] secrets
+#                 ?perfil= URL params are IGNORED for email users — cannot be spoofed
+_is_email_user = (
+    st.session_state.get("authenticated", False) and
+    not st.session_state.get("user_email", "").startswith("token:")
+)
+
+forced_profile_key = ""
 if _token_profile:
-    # Token URL (personalised link) always wins
-    forced_profile_key = _token_profile
-elif url_profile:
-    # Explicit ?perfil= URL param (e.g. from a custom link) takes next priority
-    forced_profile_key = url_profile
-elif st.session_state.get("user_perfil", ""):
-    # Server-side stored profile: loaded from Google Sheets 'perfil' column at login.
-    # Device-independent — same profile on phone, laptop, any browser, any device.
-    forced_profile_key = st.session_state["user_perfil"]
+    forced_profile_key = _token_profile          # Inga's admin token: use token mapping
+elif _is_email_user:
+    forced_profile_key = st.session_state.get("user_perfil", "general") or "general"
 
 SHEET_ID = st.secrets.get("SHEET_ID", "")
 
@@ -1058,10 +1050,6 @@ default_idx   = len(profile_names) - 1  # Vista General fallback
 is_locked     = False
 
 if forced_profile_key:
-    # Match priority:
-    # 1. Exact match on p["key"]  (e.g. "compras", "instaladores") — used by index.html and share links
-    # 2. Exact match on profile name (e.g. "🛒 Compras / Materiales") — fallback for bookmarked URLs
-    # Never mangle the string — just compare directly after URL-decoding (done above).
     matched = next(
         (n for n, p in PROFILES.items() if p["key"] == forced_profile_key),
         next(
@@ -1070,9 +1058,10 @@ if forced_profile_key:
         )
     )
     default_idx = profile_names.index(matched)
-    # Token URLs lock the profile — personalised client links always show their assigned sector.
-    # Email-login users arriving with ?perfil= get it PRE-SELECTED but can freely switch.
-    is_locked   = bool(_token_profile)
+
+# Email users are ALWAYS locked — they cannot switch profiles.
+# Token URL users (Inga's admin link ?token=inga_admin) see the full selector.
+is_locked = _is_email_user
 # ════════════════════════════════════════════════════════════
 # SIDEBAR
 # ════════════════════════════════════════════════════════════
