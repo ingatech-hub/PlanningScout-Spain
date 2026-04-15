@@ -49,49 +49,175 @@ LOGO_HTML = (
 
 # ════════════════════════════════════════════════════════════
 # AUTH
-# How client access works:
-#   1. Free trial: URL with ?perfil=expansion  → open, no login
-#   2. Paid:       URL with ?token=carlos_vimad → checks Streamlit secrets
-#   3. require_token=true: any URL without valid token → lock screen
+# Two access paths:
+#   1. Token URL  ?token=carlos_vimad  → maps to profile, bypasses login (existing clients)
+#   2. Email + password login          → credentials stored in st.secrets["users"]
 #
-# Clients NEVER need a Streamlit account. They just open the URL.
+# Add approved users in Streamlit Cloud secrets (Settings → Secrets):
+#   [users]
+#   "leandro@kinepolis.com" = "welcome1"
+#   "carlos@empresa.es"     = "OtraClave24"
+#
+# Clients NEVER need a Streamlit account. They open the URL, see the login form.
 # ════════════════════════════════════════════════════════════
-qp             = st.query_params
-url_token      = qp.get("token", "")
-url_profile    = unquote(qp.get("perfil", ""))   # decode %20, %2F, emoji encoding etc.
-client_tokens  = {}
+qp          = st.query_params
+url_token   = qp.get("token", "")
+url_profile = unquote(qp.get("perfil", ""))   # decode %20, %2F, emoji encoding etc.
+
+client_tokens = {}
 try:
     ct = st.secrets.get("client_tokens", {})
     client_tokens = dict(ct) if ct else {}
 except Exception:
     pass
 
-require_token      = str(st.secrets.get("REQUIRE_TOKEN", "false")).lower() == "true"
-forced_profile_key = None
-if url_token and url_token in client_tokens:
-    forced_profile_key = client_tokens[url_token]
-elif url_profile:
-    # url_profile is now properly decoded (e.g. "compras" or "🛒 Compras / Materiales").
-    # We store it as-is — the matching below handles both forms without mangling.
-    forced_profile_key = url_profile
+# ── Initialise session state ──
+for _k, _v in [("authenticated", False), ("user_email", ""), ("login_error", "")]:
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
 
-if require_token and not forced_profile_key:
+# ── Token URL bypass (personalised links sent to existing clients) ──
+_token_profile = None
+if url_token and url_token in client_tokens:
+    _token_profile = client_tokens[url_token]
+    st.session_state["authenticated"] = True
+    st.session_state["user_email"]    = f"token:{url_token}"
+
+# ── Login gate: show branded form if not yet authenticated ──
+if not st.session_state["authenticated"]:
+    _users = {}
+    try:
+        _u = st.secrets.get("users", {})
+        _users = dict(_u) if _u else {}
+    except Exception:
+        pass
+
+    # Login-page CSS: dark background, hide sidebar and header, centre card
     st.markdown("""
-    <div style="min-height:80vh;display:flex;align-items:center;justify-content:center;">
-    <div style="text-align:center;max-width:380px;padding:48px 32px;background:#fff;
-         border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,.1);border:1px solid #e2e8f0;">
-      <div style="font-size:44px;margin-bottom:20px;">🔒</div>
-      <h2 style="font-size:22px;color:#0d1a2b;margin:0 0 12px;font-weight:700;
-          font-family:'Fraunces',Georgia,serif;">Acceso restringido</h2>
-      <p style="color:#64748b;font-size:14px;line-height:1.6;margin:0 0 28px;">
-        Accede mediante el enlace personalizado que te enviamos,
-        o regístrate para tu mes gratuito.
-      </p>
-      <a href="https://planningscout.com" style="display:inline-block;background:#1e3a5f;
-         color:#fff;padding:12px 28px;border-radius:10px;font-weight:600;
-         font-size:14px;text-decoration:none;">Ir a planningscout.com →</a>
-    </div></div>""", unsafe_allow_html=True)
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+.stApp { background: #0d1a2b !important; }
+[data-testid="stSidebar"]          { display: none !important; }
+header[data-testid="stHeader"]     { display: none !important; }
+.block-container {
+    padding-top: 8vh !important;
+    padding-bottom: 0 !important;
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+    max-width: 420px !important;
+    margin: 0 auto !important;
+}
+/* Input fields */
+.stTextInput > div > div > input {
+    background: #fff !important;
+    border: 1.5px solid #e2e8f0 !important;
+    border-radius: 8px !important;
+    color: #0d1a2b !important;
+    font-size: 14px !important;
+    padding: 10px 14px !important;
+}
+.stTextInput > div > div > input:focus {
+    border-color: #1e3a5f !important;
+    box-shadow: 0 0 0 3px rgba(30,58,95,.12) !important;
+    outline: none !important;
+}
+.stTextInput label p,
+.stTextInput [data-testid="stWidgetLabel"] p {
+    color: #334155 !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
+}
+/* Submit button */
+[data-testid="stFormSubmitButton"] > button {
+    background: #1e3a5f !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 10px !important;
+    font-size: 15px !important;
+    font-weight: 600 !important;
+    width: 100% !important;
+    padding: 12px 0 !important;
+    margin-top: 4px !important;
+    transition: background .15s;
+}
+[data-testid="stFormSubmitButton"] > button:hover {
+    background: #162d4a !important;
+}
+</style>""", unsafe_allow_html=True)
+
+    # Card header HTML (above the Streamlit form)
+    st.markdown(f"""
+<div style="background:#fff;border-radius:20px;padding:36px 32px 28px;
+     box-shadow:0 24px 64px rgba(0,0,0,.5);">
+  <div style="text-align:center;margin-bottom:28px;">
+    {LOGO_HTML}
+    <div style="display:inline-flex;align-items:center;margin-top:14px;
+         background:rgba(200,134,10,.1);border:1px solid rgba(200,134,10,.3);
+         border-radius:100px;padding:5px 16px;">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:10px;
+            font-weight:600;color:#c8860a;letter-spacing:.07em;">
+        ✦ ACCESO ANTICIPADO · SELECTIVO
+      </span>
+    </div>
+    <h2 style="font-family:'Fraunces',Georgia,serif;font-size:22px;font-weight:700;
+         color:#0d1a2b;margin:16px 0 6px;">Tu radar de proyectos</h2>
+    <p style="font-size:13px;color:#64748b;margin:0;
+         font-family:'Plus Jakarta Sans',system-ui,sans-serif;line-height:1.5;">
+      Introduce tus credenciales de acceso.
+    </p>
+  </div>
+""", unsafe_allow_html=True)
+
+    with st.form("login_form"):
+        _email_in = st.text_input("Email profesional", placeholder="tu@empresa.com")
+        _pass_in  = st.text_input("Contraseña", type="password", placeholder="••••••••")
+        _submit   = st.form_submit_button("Acceder al radar →", use_container_width=True)
+
+    if _submit:
+        _e = _email_in.strip().lower()
+        _p = _pass_in.strip()
+        if _e in _users and _users[_e] == _p:
+            st.session_state["authenticated"] = True
+            st.session_state["user_email"]    = _e
+            st.session_state["login_error"]   = ""
+            st.rerun()
+        else:
+            st.session_state["login_error"] = "Credenciales incorrectas. Verifica tu email y contraseña."
+
+    if st.session_state["login_error"]:
+        st.markdown(
+            f'<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;'
+            f'padding:10px 14px;font-size:13px;color:#dc2626;text-align:center;'
+            f'font-family:\'Plus Jakarta Sans\',system-ui,sans-serif;margin-top:4px;">'
+            f'{html_lib.escape(st.session_state["login_error"])}</div>',
+            unsafe_allow_html=True,
+        )
+
+    # Card footer HTML (below the Streamlit form)
+    st.markdown("""
+  <div style="text-align:center;margin-top:20px;padding-top:18px;
+       border-top:1px solid #f1f5f9;">
+    <p style="font-size:12px;color:#94a3b8;margin:0 0 6px;
+         font-family:'Plus Jakarta Sans',system-ui,sans-serif;">
+      ¿Aún no tienes acceso?
+    </p>
+    <a href="https://planningscout.com"
+       style="font-size:12px;color:#1e3a5f;font-weight:600;text-decoration:none;">
+      Solicitar acceso en planningscout.com &rarr;
+    </a>
+  </div>
+</div>""", unsafe_allow_html=True)
+
     st.stop()
+
+# ── After successful auth: resolve profile ──
+# Token URL locks the profile; email login leaves it free.
+forced_profile_key = None
+if _token_profile:
+    forced_profile_key = _token_profile
+elif url_profile:
+    forced_profile_key = url_profile
 
 SHEET_ID = st.secrets.get("SHEET_ID", "")
 
@@ -824,6 +950,25 @@ with st.sidebar:
     # Crisp logo — base64 embedded, no resizing blur
     st.markdown(LOGO_HTML, unsafe_allow_html=True)
     st.markdown('<div style="height:1px;background:#e2e8f0;margin:14px 0 16px;"></div>', unsafe_allow_html=True)
+
+    # ── Session info + logout (email login only; token users are anonymous) ──
+    _umail = st.session_state.get("user_email", "")
+    if _umail and not _umail.startswith("token:"):
+        _udisplay = _umail if len(_umail) <= 30 else _umail[:27] + "\u2026"
+        st.markdown(f"""
+<div style="background:#eff4fb;border:1px solid rgba(30,58,95,.15);border-radius:8px;
+     padding:8px 12px;margin-bottom:6px;">
+  <p style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#94a3b8;
+     text-transform:uppercase;letter-spacing:.07em;margin:0 0 2px;">Sesi\u00f3n activa</p>
+  <p style="font-size:12px;font-weight:600;color:#1e3a5f;margin:0;
+     overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{_udisplay}</p>
+</div>""", unsafe_allow_html=True)
+        if st.button("\u21a9 Cerrar sesi\u00f3n", key="logout_btn"):
+            st.session_state["authenticated"] = False
+            st.session_state["user_email"]    = ""
+            st.session_state["login_error"]   = ""
+            st.rerun()
+        st.markdown('<div style="height:1px;background:#e2e8f0;margin:10px 0 14px;"></div>', unsafe_allow_html=True)
 
     # Profile selector
     st.markdown(
