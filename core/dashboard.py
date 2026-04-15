@@ -49,16 +49,13 @@ LOGO_HTML = (
 
 # ════════════════════════════════════════════════════════════
 # USER STORE — Google Sheets "Users" tab
-# Sheet columns (row 1 = headers):  email | password | sector | active
-#   sector = profile key, e.g. "expansion", "instaladores", "constructora"
-#   Leave sector blank → user sees profile selector, defaults to Vista General
+# Sheet columns (row 1 = headers):  email | password | active
 # Inga adds rows here to grant access. No Streamlit redeploy needed.
 # Fallback: st.secrets["users"] still works for backward compat.
 # ════════════════════════════════════════════════════════════
 @st.cache_data(ttl=60)
 def load_users_from_sheet():
-    """Load {email: {'password': pw, 'sector': sec}} from the 'Users' worksheet.
-    Returns {} on any error so login never breaks on sheet issues."""
+    """Load {email: password} from the 'Users' worksheet. Returns {} on any error."""
     try:
         sa = dict(st.secrets["gcp_service_account"])
         creds = Credentials.from_service_account_info(sa, scopes=[
@@ -70,12 +67,11 @@ def load_users_from_sheet():
         rows = ws.get_all_records()
         users = {}
         for row in rows:
-            email    = str(row.get("email",    "") or "").strip().lower()
+            email    = str(row.get("email", "") or "").strip().lower()
             password = str(row.get("password", "") or "").strip()
-            sector   = str(row.get("sector",   "") or "").strip().lower()
-            active   = str(row.get("active",   "TRUE") or "TRUE").strip().upper()
+            active   = str(row.get("active", "TRUE") or "TRUE").strip().upper()
             if email and password and active != "FALSE":
-                users[email] = {"password": password, "sector": sector}
+                users[email] = password
         return users
     except Exception:
         return {}
@@ -152,7 +148,7 @@ except Exception:
     pass
 
 # ── Initialise session state ──
-for _k, _v in [("authenticated", False), ("user_email", ""), ("login_error", ""), ("user_profile", "")]:
+for _k, _v in [("authenticated", False), ("user_email", ""), ("login_error", "")]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -166,15 +162,14 @@ if url_token and url_token in client_tokens:
 # ── Login gate: show branded form if not yet authenticated ──
 if not st.session_state["authenticated"]:
     # Load users: Google Sheets "Users" tab first, st.secrets["users"] as fallback
-    _sheet_u_full = load_users_from_sheet()           # {email: {'password': pw, 'sector': sec}}
-    _sheet_u      = {e: d["password"] for e, d in _sheet_u_full.items()}  # {email: pw} for auth
+    _sheet_u  = load_users_from_sheet()
     _secret_u = {}
     try:
         _su = st.secrets.get("users", {})
         _secret_u = dict(_su) if _su else {}
     except Exception:
         pass
-    _users = {**_secret_u, **_sheet_u}   # password-only dict; sheet overrides secrets
+    _users = {**_secret_u, **_sheet_u}   # sheet overrides secrets for same email
 
     # Login-page CSS: block-container IS the card — one unified white box, no second container
     st.markdown("""
@@ -241,28 +236,23 @@ header[data-testid="stHeader"] { display: none !important; }
 [data-testid="stFormSubmitButton"] > button:hover {
     background: #162d4a !important;
 }
+
+/* Hide Streamlit's "Press Enter to submit form" tooltip */
+[data-testid="InputInstructions"] { display: none !important; }
 </style>""", unsafe_allow_html=True)
 
     # Header HTML — sits directly in block-container, no wrapper div
     st.markdown(f"""
-<div style="text-align:center;margin-bottom:24px;">
-  <div style="margin-bottom:4px;">{LOGO_HTML}</div>
-  <div style="display:inline-flex;align-items:center;margin-top:12px;
-       background:rgba(200,134,10,.07);border:1px solid rgba(200,134,10,.25);
-       border-radius:100px;padding:4px 14px;">
-    <span style="font-family:'JetBrains Mono',monospace;font-size:10px;
-          font-weight:600;color:#c8860a;letter-spacing:.07em;">
-      &#10022; ACCESO ANTICIPADO &middot; SELECTIVO
-    </span>
-  </div>
-  <h2 style="font-family:'Fraunces',Georgia,serif;font-size:22px;font-weight:700;
-       color:#0d1a2b;margin:14px 0 5px;">Tu radar de proyectos</h2>
-  <p style="font-size:13px;color:#94a3b8;margin:0;
-       font-family:'Plus Jakarta Sans',system-ui,sans-serif;">
-    Introduce tus credenciales de acceso.
+<div style="text-align:center;margin-bottom:28px;">
+  <div style="margin-bottom:20px;">{LOGO_HTML}</div>
+  <h2 style="font-family:'Fraunces',Georgia,serif;font-size:24px;font-weight:700;
+       color:#0d1a2b;margin:0 0 8px;letter-spacing:-.3px;">Bienvenido</h2>
+  <p style="font-size:14px;color:#64748b;margin:0;
+       font-family:'Plus Jakarta Sans',system-ui,sans-serif;line-height:1.5;">
+    Introduce tus credenciales para acceder al radar.
   </p>
 </div>
-<div style="height:1px;background:#f1f5f9;margin:0 0 22px;"></div>
+<div style="height:1px;background:#edf0f4;margin:0 0 24px;"></div>
 """, unsafe_allow_html=True)
 
     with st.form("login_form"):
@@ -274,11 +264,8 @@ header[data-testid="stHeader"] { display: none !important; }
         _e = _email_in.strip().lower()
         _p = _pass_in.strip()
         if _e in _users and _users[_e] == _p:
-            # Sector comes from the Users sheet (empty string if not set)
-            _user_sector = _sheet_u_full.get(_e, {}).get("sector", "").strip()
             st.session_state["authenticated"] = True
             st.session_state["user_email"]    = _e
-            st.session_state["user_profile"]  = _user_sector
             st.session_state["login_error"]   = ""
             log_activity(_e, "login")
             st.rerun()
@@ -310,14 +297,12 @@ header[data-testid="stHeader"] { display: none !important; }
     st.stop()
 
 # ── After successful auth: resolve profile ──
-# Priority: token URL (locks) > ?perfil= URL param > stored sector from sheet > Vista General
+# Token URL locks the profile; email login leaves it free.
 forced_profile_key = None
 if _token_profile:
     forced_profile_key = _token_profile
 elif url_profile:
     forced_profile_key = url_profile
-elif st.session_state.get("user_profile"):
-    forced_profile_key = st.session_state["user_profile"]
 
 SHEET_ID = st.secrets.get("SHEET_ID", "")
 
@@ -328,9 +313,8 @@ try:
     _store_secret = dict(_ss) if _ss else {}
 except Exception:
     pass
-_store_sheet_full = load_users_from_sheet()                                  # {email: {password, sector}}
-_store_sheet      = {e: d["password"] for e, d in _store_sheet_full.items()} # password-only
-_all_users        = {**_store_secret, **_store_sheet}
+_store_sheet = load_users_from_sheet()
+_all_users   = {**_store_secret, **_store_sheet}
 
 # ════════════════════════════════════════════════════════════
 # GLOBAL CSS — only for Streamlit chrome, not card content
@@ -1042,6 +1026,7 @@ if forced_profile_key:
     # Match priority:
     # 1. Exact match on p["key"]  (e.g. "compras", "instaladores") — used by index.html and share links
     # 2. Exact match on profile name (e.g. "🛒 Compras / Materiales") — fallback for bookmarked URLs
+    # Never mangle the string — just compare directly after URL-decoding (done above).
     matched = next(
         (n for n, p in PROFILES.items() if p["key"] == forced_profile_key),
         next(
@@ -1050,9 +1035,7 @@ if forced_profile_key:
         )
     )
     default_idx = profile_names.index(matched)
-    # Only lock the profile selector for token-URL clients (personalised links).
-    # Email-login users see their sector pre-selected but can freely change it.
-    is_locked = (_token_profile is not None)
+    is_locked   = True
 
 # ════════════════════════════════════════════════════════════
 # SIDEBAR
@@ -1078,7 +1061,6 @@ with st.sidebar:
         if st.button("\u21a9 Cerrar sesi\u00f3n", key="logout_btn"):
             st.session_state["authenticated"] = False
             st.session_state["user_email"]    = ""
-            st.session_state["user_profile"]  = ""
             st.session_state["login_error"]   = ""
             st.rerun()
         st.markdown('<div style="height:1px;background:#e2e8f0;margin:10px 0 14px;"></div>', unsafe_allow_html=True)
