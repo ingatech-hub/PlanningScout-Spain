@@ -254,8 +254,6 @@ header[data-testid="stHeader"] { display: none !important; }
     st.markdown(f"""
 <div style="text-align:center;margin-bottom:28px;">
   <div style="margin-bottom:20px;">{LOGO_HTML}</div>
-  <h2 style="font-family:'Fraunces',Georgia,serif;font-size:24px;font-weight:700;
-       color:#0d1a2b;margin:0 0 8px;letter-spacing:-.3px;">Bienvenido</h2>
   <p style="font-size:14px;color:#64748b;margin:0;
        font-family:'Plus Jakarta Sans',system-ui,sans-serif;line-height:1.5;">
     Introduce tus credenciales para acceder al radar.
