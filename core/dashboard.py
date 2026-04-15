@@ -1035,8 +1035,9 @@ if forced_profile_key:
         )
     )
     default_idx = profile_names.index(matched)
-    is_locked   = True
-
+    # Token URLs lock the profile — personalised client links always show their assigned sector.
+    # Email-login users arriving with ?perfil= get it PRE-SELECTED but can freely switch.
+    is_locked   = bool(_token_profile)
 # ════════════════════════════════════════════════════════════
 # SIDEBAR
 # ════════════════════════════════════════════════════════════
