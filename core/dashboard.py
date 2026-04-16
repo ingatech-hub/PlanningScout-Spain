@@ -9,6 +9,23 @@ import html as html_lib
 import html as _html_esc  # alias used in card builder
 import os
 import base64
+import urllib.parse   # used in geocoding
+
+# ── Auto-install folium if not present ──────────────────────
+try:
+    import folium
+    from streamlit_folium import st_folium
+    _FOLIUM_OK = True
+except ImportError:
+    try:
+        import subprocess, sys
+        subprocess.check_call([sys.executable, "-m", "pip", "install",
+                               "folium", "streamlit-folium", "-q"])
+        import folium
+        from streamlit_folium import st_folium
+        _FOLIUM_OK = True
+    except Exception:
+        _FOLIUM_OK = False
 
 # ════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -934,6 +951,7 @@ def build_card(row):
         "licitacion":        ("🔵", "Licitación activa",      "#eff4fb", "#1e3a5f", "#bfdbfe"),
         "primera_ocupacion": ("⚪", "1ª Ocupación",           "#f8fafc", "#64748b", "#e2e8f0"),
         "en_tramite":        ("🟠", "En trámite",             "#fff7ed", "#c2410c", "#fed7aa"),
+        "solicitud":         ("⚡", "Pre-lead · En solicitud","#fffbeb", "#b45309", "#fde68a"),
     }
     if fase_val and fase_val in _FASE_LABELS:
         fi, ft, fb, fc, fbd = _FASE_LABELS[fase_val]
@@ -980,6 +998,315 @@ def build_card(row):
         f'{footer}'
         f'</div>'
     )
+
+# ════════════════════════════════════════════════════════════
+# MAP HELPERS — coordinate extraction + geocoding
+# ════════════════════════════════════════════════════════════
+# Madrid region bounding box for sanity-checking coordinates
+_MAD_LAT_MIN, _MAD_LAT_MAX = 39.8, 41.2
+_MAD_LON_MIN, _MAD_LON_MAX = -4.6, -3.0
+
+def _extract_coords_from_maps_url(maps_url):
+    """Try to extract lat/lon from a Google Maps URL. Returns (lat, lon) or (None, None)."""
+    if not maps_url:
+        return None, None
+    # Pattern 1: @lat,lon,zoom  (e.g. @40.4165,-3.7026,15z)
+    m = re.search(r'@(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)', maps_url)
+    if m:
+        lat, lon = float(m.group(1)), float(m.group(2))
+        if _MAD_LAT_MIN <= lat <= _MAD_LAT_MAX and _MAD_LON_MIN <= lon <= _MAD_LON_MAX:
+            return lat, lon
+    # Pattern 2: ?q=lat,lon or &q=lat,lon
+    m = re.search(r'[?&]q=(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)', maps_url)
+    if m:
+        lat, lon = float(m.group(1)), float(m.group(2))
+        if _MAD_LAT_MIN <= lat <= _MAD_LAT_MAX and _MAD_LON_MIN <= lon <= _MAD_LON_MAX:
+            return lat, lon
+    return None, None
+
+def _extract_search_query_from_maps_url(maps_url):
+    """Extract the search query text from a Google Maps search URL."""
+    if not maps_url:
+        return ""
+    m = re.search(r'/search/([^?#]+)', maps_url)
+    if m:
+        return m.group(1).replace('+', ' ').strip()
+    return ""
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _geocode_nominatim(query):
+    """
+    Geocode a free-text query using Nominatim (OpenStreetMap).
+    Returns (lat, lon) or (None, None).
+    Always appends ', Comunidad de Madrid, España' to bias results.
+    Caches for 24h — no repeated calls for same address.
+    """
+    try:
+        import urllib.request, json, time
+        q = query.strip()
+        if not q or len(q) < 4:
+            return None, None
+        # Strip urbanismo codes (UE.5, S-02, ZO.8, APE.08.24) that confuse geocoders
+        q_clean = re.sub(r'\b(UE|ZO|S|UA|PE|PP|APE|ARE|SUS|SUB)[\.\-]?\d+(?:[\.\-]\d+)?\b', '', q, flags=re.I)
+        q_clean = re.sub(r'\bUnidad de Ejecuci[oó]n\b', '', q_clean, flags=re.I)
+        q_clean = re.sub(r'\bSector Urbanizable\b', '', q_clean, flags=re.I)
+        q_clean = re.sub(r'\bPlan Especial\b', '', q_clean, flags=re.I)
+        q_clean = re.sub(r'\s+', ' ', q_clean).strip(' ,.')
+        if not q_clean or len(q_clean) < 3:
+            return None, None
+        # Add Madrid context
+        full = q_clean + ", Comunidad de Madrid, España"
+        url = (f"https://nominatim.openstreetmap.org/search"
+               f"?q={urllib.parse.quote(full)}&format=json&limit=1&countrycodes=es")
+        req = urllib.request.Request(url, headers={"User-Agent": "PlanningScout/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read())
+        if data:
+            lat, lon = float(data[0]["lat"]), float(data[0]["lon"])
+            if _MAD_LAT_MIN <= lat <= _MAD_LAT_MAX and _MAD_LON_MIN <= lon <= _MAD_LON_MAX:
+                return lat, lon
+        return None, None
+    except Exception:
+        return None, None
+
+# Madrid municipality centroids — instant fallback when address geocoding fails.
+# Covers the most common BOCM municipalities for retail/expansion profiles.
+_MUNI_CENTROIDS = {
+    "madrid":              (40.4168, -3.7038),
+    "alcalá de henares":   (40.4818, -3.3647),
+    "alcobendas":          (40.5499, -3.6414),
+    "alcorcón":            (40.3490, -3.8242),
+    "algete":              (40.5956, -3.4965),
+    "arganda del rey":     (40.3015, -3.4422),
+    "aranjuez":            (40.0332, -3.6019),
+    "boadilla del monte":  (40.4071, -3.8759),
+    "brunete":             (40.4014, -3.9976),
+    "collado villalba":    (40.6330, -4.0046),
+    "coslada":             (40.4227, -3.5650),
+    "fuenlabrada":         (40.2839, -3.7982),
+    "galapagar":           (40.5761, -4.0048),
+    "getafe":              (40.3053, -3.7326),
+    "humanes de madrid":   (40.2593, -3.8270),
+    "las rozas de madrid": (40.4933, -3.8728),
+    "leganés":             (40.3283, -3.7640),
+    "majadahonda":         (40.4734, -3.8718),
+    "mejorada del campo":  (40.3961, -3.4920),
+    "móstoles":            (40.3220, -3.8642),
+    "navalcarnero":        (40.2851, -4.0127),
+    "paracuellos de jarama": (40.5065, -3.5271),
+    "parla":               (40.2381, -3.7760),
+    "pinto":               (40.2427, -3.6974),
+    "pozuelo de alarcón":  (40.4349, -3.8131),
+    "rivas-vaciamadrid":   (40.3556, -3.5218),
+    "san fernando de henares": (40.4245, -3.5368),
+    "san sebastián de los reyes": (40.5534, -3.6281),
+    "torrejón de ardoz":   (40.4586, -3.4795),
+    "tres cantos":         (40.5951, -3.7078),
+    "valdemoro":           (40.1910, -3.6747),
+    "velilla de san antonio": (40.3774, -3.5115),
+    "villanueva de la cañada": (40.4521, -3.9849),
+    "villanueva del pardillo": (40.4748, -3.9354),
+}
+
+def _get_coords(row):
+    """
+    Get (lat, lon) for a row using a 3-tier fallback chain:
+    1. Extract directly from the Maps Link URL (instant, most accurate)
+    2. Geocode the address + municipality via Nominatim (cached 24h)
+    3. Fall back to municipality centroid (always works, zone-level precision)
+    Returns (lat, lon, precision) where precision is 'exact'|'geocoded'|'municipality'|None
+    """
+    maps = str(row.get("maps", "") or "").strip()
+    muni = str(row.get("municipio", "") or "Madrid").strip()
+    addr = str(row.get("direccion", "") or "").strip()
+
+    # Tier 1: direct coords from Maps URL
+    lat, lon = _extract_coords_from_maps_url(maps)
+    if lat:
+        return lat, lon, "exact"
+
+    # Tier 2: geocode the search query embedded in the Maps URL
+    query = _extract_search_query_from_maps_url(maps)
+    if query:
+        lat, lon = _geocode_nominatim(query)
+        if lat:
+            return lat, lon, "geocoded"
+
+    # Tier 3: geocode address + municipality
+    if addr and muni and len(addr) > 4:
+        lat, lon = _geocode_nominatim(f"{addr}, {muni}")
+        if lat:
+            return lat, lon, "geocoded"
+
+    # Tier 4: municipality centroid
+    key = muni.lower().strip()
+    if key in _MUNI_CENTROIDS:
+        lat, lon = _MUNI_CENTROIDS[key]
+        return lat, lon, "municipality"
+
+    # Last resort: Madrid centre
+    return 40.4168, -3.7038, "municipality"
+
+
+# Colour palette for map pins — matches dashboard design system
+_PIN_COLOURS = {
+    # By score range
+    "high":         "#16a34a",   # green — score ≥ 65
+    "mid":          "#c8860a",   # amber — score 40-64
+    "low":          "#64748b",   # grey  — score < 40
+    # By profile (used in tooltip badge)
+    "expansion":    "#0ea5e9",
+    "promotores":   "#8b5cf6",
+    "constructora": "#ef4444",
+    "instaladores": "#f97316",
+    "industrial":   "#6b7280",
+    "infrastructura":"#1e3a5f",
+    "alquiler":     "#b45309",
+    "compras":      "#059669",
+    "general":      "#64748b",
+}
+
+def _score_colour(score):
+    if score >= 65: return _PIN_COLOURS["high"]
+    if score >= 40: return _PIN_COLOURS["mid"]
+    return _PIN_COLOURS["low"]
+
+def _make_pin_icon(score, fase=""):
+    """Create a styled DivIcon for the folium marker."""
+    colour = _score_colour(score)
+    # Special icon for pre-leads (solicitud)
+    symbol = "⚡" if fase == "solicitud" else ("★" if score >= 65 else "●")
+    return folium.DivIcon(
+        html=f"""<div style="
+            width:28px;height:28px;border-radius:50%;
+            background:{colour};border:2px solid #fff;
+            box-shadow:0 2px 6px rgba(0,0,0,.3);
+            display:flex;align-items:center;justify-content:center;
+            font-size:12px;color:#fff;font-weight:700;
+            cursor:pointer;">
+            {symbol}
+        </div>""",
+        icon_size=(28, 28),
+        icon_anchor=(14, 14),
+    )
+
+
+def build_map(df_map, profile_key="general"):
+    """
+    Build and return a Folium map for the given filtered dataframe.
+    Each lead becomes a marker with a popup showing key info and a link.
+    """
+    if not _FOLIUM_OK:
+        return None
+
+    # Filter to leads with mappable locations
+    rows_with_loc = []
+    with st.spinner("Geolocalizando proyectos…"):
+        for _, row in df_map.iterrows():
+            lat, lon, prec = _get_coords(row.to_dict())
+            rows_with_loc.append((row, lat, lon, prec))
+
+    if not rows_with_loc:
+        return None
+
+    # Centre map on the mean of all points
+    lats = [r[1] for r in rows_with_loc]
+    lons = [r[2] for r in rows_with_loc]
+    centre_lat = sum(lats) / len(lats)
+    centre_lon = sum(lons) / len(lons)
+
+    # Choose zoom based on spread
+    lat_range = max(lats) - min(lats)
+    zoom = 10 if lat_range > 0.5 else (11 if lat_range > 0.2 else 12)
+
+    m = folium.Map(
+        location=[centre_lat, centre_lon],
+        zoom_start=zoom,
+        tiles=None,
+    )
+
+    # Light CartoDB tile — clean, no clutter
+    folium.TileLayer(
+        tiles="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+        attr="© OpenStreetMap contributors © CARTO",
+        name="CartoDB Light",
+        max_zoom=19,
+    ).add_to(m)
+
+    # Add markers
+    for row, lat, lon, prec in rows_with_loc:
+        r = row.to_dict()
+        score   = int(r.get("score", 0) or 0)
+        muni    = r.get("municipio", "Madrid") or "Madrid"
+        addr    = r.get("direccion", "") or ""
+        tipo    = r.get("tipo", "") or ""
+        fase    = r.get("fase", "") or ""
+        pem     = r.get("pem_combined", 0) or 0
+        bocm    = r.get("bocm_url", "") or ""
+        maps_u  = r.get("maps", "") or ""
+        desc    = r.get("descripcion", "") or ""
+        fecha   = r.get("fecha", "") or ""
+        pz      = r.get("pem_est_raw", "") or ""   # Estimated PEM text
+
+        # PEM display
+        if pem >= 1_000_000:
+            pem_s = f"€{pem/1_000_000:.1f}M"
+        elif pem >= 1000:
+            pem_s = f"€{int(pem/1000)}K"
+        elif pz and "⚪" not in pz and pz.strip():
+            pem_s = pz[:30]
+        else:
+            pem_s = "PEM no declarado"
+
+        # Score badge colour
+        sc_bg = "#dcfce7" if score >= 65 else ("#fef3c7" if score >= 40 else "#f1f5f9")
+        sc_fg = "#16a34a" if score >= 65 else ("#b45309" if score >= 40 else "#64748b")
+
+        # Precision indicator (only show when approximate)
+        prec_note = ""
+        if prec == "municipality":
+            prec_note = f"<div style='font-size:10px;color:#94a3b8;margin-top:4px;'>📍 Ubicación aproximada ({muni})</div>"
+        elif prec == "geocoded":
+            prec_note = f"<div style='font-size:10px;color:#94a3b8;margin-top:4px;'>📍 Zona estimada</div>"
+
+        # Pre-lead badge
+        prelead_badge = ""
+        if fase == "solicitud":
+            prelead_badge = "<span style='background:#fef3c7;color:#b45309;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-right:4px;'>⚡ PRE-LEAD</span>"
+
+        # Links
+        link_bocm  = f'<a href="{bocm}" target="_blank" style="color:#1e3a5f;font-weight:600;font-size:12px;text-decoration:none;">↗ Ver BOCM</a>' if bocm else ""
+        link_maps  = f'<a href="{maps_u}" target="_blank" style="color:#1e3a5f;font-weight:600;font-size:12px;text-decoration:none;margin-left:10px;">🗺️ Maps</a>' if maps_u else ""
+
+        popup_html = f"""
+<div style="font-family:'Plus Jakarta Sans',system-ui,sans-serif;min-width:240px;max-width:300px;">
+  <div style="background:#f7f8fa;border-radius:8px 8px 0 0;padding:10px 12px;border-bottom:1px solid #e2e8f0;">
+    <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;">{muni}</div>
+    <div style="font-weight:700;color:#0d1a2b;font-size:13px;margin-top:2px;line-height:1.3;">{addr[:60] or tipo[:60]}</div>
+  </div>
+  <div style="padding:10px 12px;">
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+      {prelead_badge}
+      <span style="background:{sc_bg};color:{sc_fg};font-size:11px;font-weight:700;padding:2px 8px;border-radius:100px;">{score} pts</span>
+      <span style="background:#eff4fb;color:#1e3a5f;font-size:11px;padding:2px 8px;border-radius:100px;">{tipo[:30]}</span>
+    </div>
+    <div style="font-size:13px;font-weight:700;color:#1e3a5f;margin-bottom:4px;">{pem_s}</div>
+    <div style="font-size:11px;color:#64748b;line-height:1.4;margin-bottom:8px;">{desc[:120]}{'…' if len(desc) > 120 else ''}</div>
+    <div style="font-size:11px;color:#94a3b8;">{fecha}</div>
+    {prec_note}
+    <div style="margin-top:8px;border-top:1px solid #f1f5f9;padding-top:8px;">{link_bocm}{link_maps}</div>
+  </div>
+</div>"""
+
+        folium.Marker(
+            location=[lat, lon],
+            popup=folium.Popup(popup_html, max_width=310),
+            tooltip=f"{muni} · {pem_s} · {score}pts",
+            icon=_make_pin_icon(score, fase),
+        ).add_to(m)
+
+    return m, len(rows_with_loc)
+
 
 # ════════════════════════════════════════════════════════════
 # DATA LOADING
@@ -1303,36 +1630,87 @@ if not df_f.empty:
 
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-# ── Leads ──
-if df_f.empty:
-    st.markdown(f"""
-    <div style="text-align:center;padding:56px 24px;background:#fff;
-         border:1.5px solid #e2e8f0;border-radius:14px;
-         font-family:'Plus Jakarta Sans',system-ui,sans-serif;">
-      <div style="font-size:40px;">🔍</div>
-      <h3 style="font-family:'Fraunces',Georgia,serif;font-size:19px;
-          color:#0d1a2b;margin:14px 0 8px;">Sin proyectos con estos filtros</h3>
-      <p style="font-size:13px;color:#64748b;line-height:1.6;margin:0;">
-        Amplía el período (ahora: {days_back} días),<br>
-        reduce el PEM mínimo ({fmt(min_pem)}),<br>
-        o cambia el perfil en el panel izquierdo.
-      </p>
-    </div>""", unsafe_allow_html=True)
-else:
-    st.markdown(
-        f'<div style="display:flex;align-items:center;justify-content:space-between;'
-        f'margin:0 0 14px;padding-bottom:12px;border-bottom:1px solid #e2e8f0;">'
-        f'<h2 style="font-family:\'Fraunces\',Georgia,serif;font-size:19px;font-weight:700;'
-        f'color:#0d1a2b;margin:0;">Proyectos detectados</h2>'
-        f'<span style="font-family:\'JetBrains Mono\',monospace;font-size:11px;'
-        f'background:#1e3a5f;color:#fff;padding:4px 12px;border-radius:100px;">'
-        f'{count} resultado{"s" if count != 1 else ""}</span>'
-        f'</div>',
-        unsafe_allow_html=True
-    )
+# ════════════════════════════════════════════════════════════
+# TABS — Lista de leads  |  Mapa interactivo
+# ════════════════════════════════════════════════════════════
+_tab_leads, _tab_mapa = st.tabs(["📋  Lista de proyectos", "🗺️  Mapa interactivo"])
 
-    for _, row in df_f.iterrows():
-        st.markdown(build_card(row.to_dict()), unsafe_allow_html=True)
+# ── TAB 1: LEADS LIST ────────────────────────────────────────
+with _tab_leads:
+    if df_f.empty:
+        st.markdown(f"""
+        <div style="text-align:center;padding:56px 24px;background:#fff;
+             border:1.5px solid #e2e8f0;border-radius:14px;
+             font-family:'Plus Jakarta Sans',system-ui,sans-serif;">
+          <div style="font-size:40px;">🔍</div>
+          <h3 style="font-family:'Fraunces',Georgia,serif;font-size:19px;
+              color:#0d1a2b;margin:14px 0 8px;">Sin proyectos con estos filtros</h3>
+          <p style="font-size:13px;color:#64748b;line-height:1.6;margin:0;">
+            Amplía el período (ahora: {days_back} días),<br>
+            reduce el PEM mínimo ({fmt(min_pem)}),<br>
+            o cambia el perfil en el panel izquierdo.
+          </p>
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown(
+            f'<div style="display:flex;align-items:center;justify-content:space-between;'
+            f'margin:0 0 14px;padding-bottom:12px;border-bottom:1px solid #e2e8f0;">'
+            f'<h2 style="font-family:\'Fraunces\',Georgia,serif;font-size:19px;font-weight:700;'
+            f'color:#0d1a2b;margin:0;">Proyectos detectados</h2>'
+            f'<span style="font-family:\'JetBrains Mono\',monospace;font-size:11px;'
+            f'background:#1e3a5f;color:#fff;padding:4px 12px;border-radius:100px;">'
+            f'{count} resultado{"s" if count != 1 else ""}</span>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+        for _, row in df_f.iterrows():
+            st.markdown(build_card(row.to_dict()), unsafe_allow_html=True)
+
+# ── TAB 2: INTERACTIVE MAP ───────────────────────────────────
+with _tab_mapa:
+    if not _FOLIUM_OK:
+        st.warning("Instala `folium` y `streamlit-folium` para activar el mapa.")
+    elif df_f.empty:
+        st.info("Sin proyectos con los filtros actuales. Ajusta el período o el perfil.")
+    else:
+        # Legend
+        st.markdown("""
+<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+     padding:10px 16px;background:#fff;border:1px solid #e2e8f0;
+     border-radius:10px;margin-bottom:14px;font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:12px;">
+  <strong style="color:#0d1a2b;font-size:12px;">Leyenda:</strong>
+  <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#16a34a;margin-right:4px;vertical-align:middle;"></span>Alta prioridad (≥65 pts)</span>
+  <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#c8860a;margin-right:4px;vertical-align:middle;"></span>Media (40–64 pts)</span>
+  <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#64748b;margin-right:4px;vertical-align:middle;"></span>Baja (&lt;40 pts)</span>
+  <span>⚡ = Pre-lead (solicitud)</span>
+  <span style="color:#94a3b8;font-size:11px;">📍 Ubicación aprox. para proyectos sin dirección exacta</span>
+</div>""", unsafe_allow_html=True)
+
+        # Map size control — Expansion directors want a large overview
+        _map_rows = min(len(df_f), 200)   # cap at 200 pins for performance
+        df_map = df_f.head(_map_rows)
+
+        result = build_map(df_map, profile_key=prof["key"])
+        if result:
+            folium_map, n_plotted = result
+            st_folium(
+                folium_map,
+                use_container_width=True,
+                height=580,
+                returned_objects=[],   # don't return click data (faster)
+            )
+            # Summary below map
+            _prec_note = ""
+            if n_plotted < count:
+                _prec_note = f" · primeros {n_plotted} mostrados"
+            st.caption(
+                f"📍 {n_plotted} proyectos mapeados{_prec_note} · "
+                f"Haz clic en un pin para ver los detalles · "
+                f"Zoom con rueda del ratón o pellizco · "
+                f"Los pines con ≈ indican ubicación a nivel de municipio"
+            )
+        else:
+            st.info("No se pudo generar el mapa. Comprueba la conexión.")
 
 # ── Footer ──
 st.markdown(f"""
