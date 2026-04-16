@@ -174,9 +174,40 @@ except Exception:
     pass
 
 # ── Initialise session state ──
-for _k, _v in [("authenticated", False), ("user_email", ""), ("login_error", ""), ("user_perfil", "")]:
+for _k, _v in [("authenticated", False), ("user_email", ""), ("login_error", ""), ("user_perfil", ""), ("_transitioning", False)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
+
+# ── Transition intercept ── Must be FIRST content check after state init.
+# When _transitioning=True the previous cycle just authenticated the user.
+# Render ONLY a full-page spinner for this cycle, clear the flag, then rerun
+# into the dashboard. This guarantees zero flash: the browser never sees the
+# login card and dashboard content in the same render cycle.
+if st.session_state.get("_transitioning"):
+    st.session_state["_transitioning"] = False
+    st.markdown(f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600&display=swap');
+.stApp {{ background: #f0f2f5 !important; }}
+[data-testid="stSidebar"], header[data-testid="stHeader"] {{ display: none !important; }}
+.block-container {{ background: transparent !important; border: none !important;
+    box-shadow: none !important; padding: 0 !important; max-width: 100% !important; }}
+@keyframes _spin {{ to {{ transform: rotate(360deg); }} }}
+</style>
+<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;
+     background:#f0f2f5;">
+  <div style="text-align:center;">
+    <div style="margin:0 auto 20px;">
+      {LOGO_HTML}
+    </div>
+    <div style="width:32px;height:32px;border:3px solid #e2e8f0;border-top-color:#1e3a5f;
+         border-radius:50%;animation:_spin .7s linear infinite;margin:0 auto 16px;"></div>
+    <p style="font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:14px;
+       color:#64748b;margin:0;">Cargando tu radar&hellip;</p>
+  </div>
+</div>""", unsafe_allow_html=True)
+    st.rerun()
+    st.stop()
 
 # ── Token URL bypass (personalised links sent to existing clients) ──
 _token_profile = None
@@ -298,40 +329,13 @@ header[data-testid="stHeader"] { display: none !important; }
         _p = _pass_in.strip()
         if _e in _users and _users[_e] == _p:
             _assigned = _secret_profiles.get(_e, "general")
-            st.session_state["authenticated"] = True
-            st.session_state["user_email"]    = _e
-            st.session_state["login_error"]   = ""
-            st.session_state["user_perfil"]   = _assigned
+            st.session_state["authenticated"]  = True
+            st.session_state["user_email"]     = _e
+            st.session_state["login_error"]    = ""
+            st.session_state["user_perfil"]    = _assigned
+            st.session_state["_transitioning"] = True   # triggers loader on next cycle
             log_activity(_e, "login")
-            # ── Transition screen ─────────────────────────────────────────────
-            # Hide the login card and show a loading spinner for this render
-            # cycle. Streamlit completes this render, THEN re-executes from the
-            # top where authenticated=True → dashboard renders. One clean transition,
-            # no flash of the login form.
-            st.markdown("""
-<style>
-/* Instantly hide the login card and form during this render cycle */
-.block-container {
-    background: transparent !important;
-    box-shadow: none !important;
-    border: none !important;
-    padding: 0 !important;
-}
-[data-testid="stForm"],
-[data-testid="stTextInput"],
-[data-testid="stFormSubmitButton"],
-div[data-testid="stMarkdownContainer"] { display: none !important; }
-@keyframes _spin { to { transform: rotate(360deg); } }
-</style>
-<div style="min-height:90vh;display:flex;align-items:center;justify-content:center;">
-  <div style="text-align:center;">
-    <div style="width:36px;height:36px;border:3px solid #e2e8f0;border-top-color:#1e3a5f;
-         border-radius:50%;animation:_spin .65s linear infinite;margin:0 auto 18px;"></div>
-    <p style="font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:15px;
-       color:#1e3a5f;font-weight:600;margin:0;">Cargando tu radar&hellip;</p>
-  </div>
-</div>""", unsafe_allow_html=True)
-            st.rerun()
+            st.rerun()   # natural rerun → intercepted by _transitioning block above
         else:
             st.session_state["login_error"] = "Credenciales incorrectas. Verifica tu email y contraseña."
 
@@ -784,21 +788,45 @@ def build_card(row):
     else:
         sbadge = ""
 
-    # ── NEW badge: shown if published within the last 7 days ──
-    _new_badge = ""
+    # ── Urgency badge: days since publication ──
+    _new_badge  = ""
+    _days_badge = ""
     _pub_for_new = fnd[:10] if fnd else fecha
     if _pub_for_new:
         try:
-            _pub_dt = datetime.strptime(_pub_for_new, "%Y-%m-%d")
-            if (datetime.now() - _pub_dt).days <= 7:
+            _pub_dt  = datetime.strptime(_pub_for_new, "%Y-%m-%d")
+            _days_old = (datetime.now() - _pub_dt).days
+            if _days_old <= 3:
                 _new_badge = (
                     "<span style='font-family:\"JetBrains Mono\",monospace;font-size:9px;"
                     "font-weight:700;letter-spacing:.08em;text-transform:uppercase;"
                     "background:#dc2626;color:#fff;border-radius:4px;padding:2px 7px;"
                     "margin-right:4px;'>Nuevo</span>"
                 )
+            elif _days_old <= 7:
+                _days_badge = (
+                    f"<span style='font-family:\"JetBrains Mono\",monospace;font-size:9px;"
+                    f"font-weight:600;background:#fef3c7;color:#b45309;border-radius:4px;"
+                    f"padding:2px 7px;margin-right:4px;'>⏱ {_days_old}d</span>"
+                )
+            elif _days_old <= 14:
+                _days_badge = (
+                    f"<span style='font-family:\"JetBrains Mono\",monospace;font-size:9px;"
+                    f"font-weight:600;background:#f1f5f9;color:#64748b;border-radius:4px;"
+                    f"padding:2px 7px;margin-right:4px;'>{_days_old}d</span>"
+                )
         except Exception:
             pass
+
+    # ── Source badge (BOCM / BOE) ──
+    _fuente = str(row.get("fuente", "") or "").strip()
+    _fuente_badge = ""
+    if _fuente == "BOE":
+        _fuente_badge = (
+            "<span style='font-family:\"JetBrains Mono\",monospace;font-size:9px;"
+            "font-weight:600;background:#eff4fb;color:#1e3a5f;border-radius:4px;"
+            "padding:2px 6px;margin-right:4px;'>BOE</span>"
+        )
 
     # ─ HEADER (inline styles, guaranteed to render) ─
     head = (
@@ -807,13 +835,24 @@ def build_card(row):
         f'    <div style="{SDO}"></div>'
         f'    <span style="{SMU}">{muni}</span>'
         f'  </div>'
-        f'  <div style="{SBD}">{_new_badge}{sbadge}{sc_pill(sc)}</div>'
+        f'  <div style="{SBD}">{_new_badge}{_days_badge}{_fuente_badge}{sbadge}{sc_pill(sc)}</div>'
         f'</div>'
     )
 
     # ─ BODY ─
     ref_html   = f'<div style="{SRF}">{ref_str}</div>' if ref_str else ""
     title_html = f'<div style="{STI}">{title}</div>'
+
+    # ── Project size (new col W) ──
+    _proj_size = esc(row.get("project_size", "") or "")
+    _size_html = ""
+    if _proj_size and _proj_size.lower() not in ("nan", "none", ""):
+        _size_html = (
+            f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:10.5px;'
+            f'color:#64748b;margin-bottom:10px;padding:5px 8px;background:#f8fafc;'
+            f'border-radius:6px;border-left:2px solid #e2e8f0;">'
+            f'📐 {_proj_size}</div>'
+        )
     addr_html  = f'<div style="{SAD}"><span>📍</span><span>{addr}</span></div>' if addr and addr != title else ""
 
     # ── Description: always visible inline (≤2 lines), "leer más" for the rest ──
@@ -991,6 +1030,7 @@ def build_card(row):
         f'{ref_html}'
         f'{title_html}'
         f'{addr_html}'
+        f'{_size_html}'
         f'{desc_preview_html}'
         f'{table_html}'
         f'</div>'
@@ -1322,6 +1362,8 @@ COL_MAP = {
     "Expediente": "expediente", "Phase": "fase",
     "AI Evaluation": "ai_evaluation", "Supplies Needed": "supplies_needed",
     "Estimated PEM": "pem_est_raw",
+    "Profile Fit": "profile_fit", "Fuente": "fuente",
+    "Project Size": "project_size",
 }
 
 @st.cache_data(ttl=300)
@@ -1476,7 +1518,29 @@ with st.sidebar:
     )
     min_pem   = st.number_input("PEM mínimo (€)", value=prof["min_value"], min_value=0, step=50_000, format="%d")
     min_score = st.slider("Puntuación mínima", 0, 100, value=prof["min_score"], step=5)
+
+    # ── Phase filter ──
+    _FASE_OPTIONS = {
+        "definitivo":        "🟢 Aprobación definitiva",
+        "licitacion":        "🔵 Licitación activa",
+        "adjudicacion":      "🏆 Adjudicación",
+        "en_obra":           "🏗️ En obra",
+        "primera_ocupacion": "🏠 1ª Ocupación",
+        "inicial":           "🟡 Aprobación inicial",
+        "en_tramite":        "🟠 En trámite",
+        "solicitud":         "⚡ Pre-lead (solicitud)",
+    }
+    fase_sel = st.multiselect(
+        "Fase del proyecto",
+        options=list(_FASE_OPTIONS.keys()),
+        format_func=lambda k: _FASE_OPTIONS[k],
+        placeholder="Todas las fases",
+    )
+
     muni_sel  = st.multiselect("Municipio", options=all_munis, placeholder="Todos")
+
+    # ── Keyword search ──
+    kw_search = st.text_input("🔍 Buscar", placeholder="promotor, calle, tipo…", label_visibility="collapsed").strip().lower()
 
     st.markdown('<div style="height:1px;background:#e2e8f0;margin:14px 0 16px;"></div>', unsafe_allow_html=True)
 
@@ -1581,6 +1645,20 @@ if prof["types"] and "tipo" in df_f.columns:
 if muni_sel and "municipio" in df_f.columns:
     df_f = df_f[df_f["municipio"].isin(muni_sel)]
 
+# ── Phase filter ──
+if fase_sel and "fase" in df_f.columns:
+    df_f = df_f[df_f["fase"].isin(fase_sel)]
+
+# ── Keyword search across key text fields ──
+if kw_search:
+    _search_cols = ["municipio", "direccion", "promotor", "tipo", "descripcion", "expediente"]
+    _mask = pd.Series([False] * len(df_f), index=df_f.index)
+    for _col in _search_cols:
+        if _col in df_f.columns:
+            _mask = _mask | df_f[_col].astype(str).str.lower().str.contains(
+                re.escape(kw_search), na=False)
+    df_f = df_f[_mask]
+
 df_f = df_f.sort_values(["score", "pem_combined"], ascending=[False, False]).reset_index(drop=True)
 
 # ── Metrics ──
@@ -1589,12 +1667,23 @@ count      = len(df_f)
 high_leads = len(df_f[df_f["score"] >= 65])
 avg_score  = int(df_f["score"].mean()) if count > 0 else 0
 
-c1, c2 = st.columns(2)
+# Format total PEM
+if total_pem >= 1_000_000_000:
+    total_pem_s = f"€{total_pem/1_000_000_000:.1f}B"
+elif total_pem >= 1_000_000:
+    total_pem_s = f"€{total_pem/1_000_000:.0f}M"
+elif total_pem >= 1_000:
+    total_pem_s = f"€{int(total_pem/1_000)}K"
+else:
+    total_pem_s = "—"
+
+c1, c2, c3 = st.columns(3)
 for col, (val, lbl, clr) in zip(
-    [c1, c2],
+    [c1, c2, c3],
     [
-        (str(count),      "Proyectos detectados", "#1e3a5f"),
-        (str(high_leads), "🟢 Prioritarios",      "#16a34a"),
+        (str(count),      "Proyectos",        "#1e3a5f"),
+        (str(high_leads), "🟢 Prioritarios",  "#16a34a"),
+        (total_pem_s,     "PEM total",        "#c8860a"),
     ]
 ):
     with col:
