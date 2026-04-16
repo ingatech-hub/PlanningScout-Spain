@@ -1677,13 +1677,12 @@ elif total_pem >= 1_000:
 else:
     total_pem_s = "—"
 
-c1, c2, c3 = st.columns(3)
+c1, c2 = st.columns(2)
 for col, (val, lbl, clr) in zip(
     [c1, c2, c3],
     [
-        (str(count),      "Proyectos",        "#1e3a5f"),
-        (str(high_leads), "🟢 Prioritarios",  "#16a34a"),
-        (total_pem_s,     "PEM total",        "#c8860a"),
+        (str(count),      "Proyectos detectados", "#1e3a5f"),
+        (str(high_leads), "🟢 Prioritarios",      "#16a34a"),
     ]
 ):
     with col:
