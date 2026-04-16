@@ -833,43 +833,59 @@ def extract_pdf_text_enhanced(url):
 
 def _fetch_pem_only_from_pdf(pdf_url):
     """
-    Lightweight PDF scan for PEM/presupuesto values only.
-    Reads first 4 pages looking for financial tables.
-    Called when JSON-LD text exists but has no PEM.
-    Returns a short string with any PEM-like values found.
+    Lightweight PDF scan targeting PEM/ICIO values only.
+    Reads ALL pages (BOCM PDFs often have financial tables at the end).
+    Extracts:
+      - Explicit PEM / presupuesto de ejecución material lines
+      - ICIO base imponible (= PEM exactly, per TRLCI art.101)
+      - Etapa budget lines (sum = total PEM for multi-phase projects)
+      - Any € figure near financial keywords
+    Returns a short tagged string or "".
     """
     try:
         sess = (get_thread_session() if threading.current_thread().name != "MainThread"
                 else get_session())
-        r = sess.get(pdf_url, timeout=30, verify=False,
+        r = sess.get(pdf_url, timeout=40, verify=False,
                      headers={**make_headers(referer=BOCM_BASE), "Accept":"application/pdf,*/*"})
         if r.status_code != 200 or len(r.content) < 500: return ""
         if r.content[:4] != b"%PDF": return ""
 
-        parts = []
+        parts    = []
+        fin_keys = ["PEM", "PRESUPUESTO DE EJECUCIÓN", "P.E.M", "BASE IMPONIBLE",
+                    "ICIO", "IMPORTE TOTAL", "PRESUPUESTO TOTAL", "ETAPA",
+                    "VALOR ESTIMADO", "IMPORTE DE LICITACIÓN", "€", "EUROS"]
+
         with pdfplumber.open(io.BytesIO(r.content)) as pdf:
-            for pg in pdf.pages[:8]:
-                # Table extraction first (PEM often in summary table)
+            for pg in pdf.pages:          # ALL pages — no limit
+                # Table rows first (most reliable for PEM figures)
                 for tbl in (pg.extract_tables() or []):
                     for row in (tbl or []):
                         if not row: continue
                         row_s = " | ".join(str(c or "") for c in row)
-                        if any(k in row_s.upper() for k in
-                               ["PEM","PRESUPUESTO","IMPORTE","BASE IMPONIBLE",
-                                "EJECUCI","TOTAL","ETAPA","€"]):
+                        if any(k in row_s.upper() for k in fin_keys):
                             parts.append(row_s)
-                # Text scan for PEM lines only (not full text)
+
+                # Full page text — scan every line for financial clues
                 t = pg.extract_text() or ""
                 for line in t.split("\n"):
-                    if any(k in line.upper() for k in
-                           ["PRESUPUESTO DE EJECUCIÓN","P.E.M","BASE IMPONIBLE",
-                            "ETAPA", "EUROS", "€"]):
+                    lu = line.upper()
+                    if any(k in lu for k in fin_keys) and re.search(r'[\d]', line):
                         parts.append(line.strip())
 
-        if parts:
-            return "TABLA_DATOS:\n" + "\n".join(parts[:30])
-        return ""
-    except Exception as e:
+        if not parts:
+            return ""
+
+        # Deduplicate while preserving order
+        seen_p = set()
+        unique = []
+        for p in parts:
+            pk = re.sub(r'\s+', ' ', p).strip()
+            if pk and pk not in seen_p:
+                seen_p.add(pk)
+                unique.append(pk)
+
+        return "TABLA_DATOS:\n" + "\n".join(unique[:50])
+    except Exception:
         return ""
 
 def _parse_pem_from_estimated_string(s):
@@ -888,74 +904,242 @@ def _parse_pem_from_estimated_string(s):
     if not nums: return None
     return sum(nums) / len(nums)   # midpoint of range
 
+def _extract_project_size(text):
+    """
+    Extract or infer the physical size of the project from BOCM/PDF text.
+    Returns a compact string for the 'Project Size' column, e.g.:
+      '48 viviendas · 4.200m² const. · Sótano 2 plantas'
+      '85.000m² sector · 32.000m² techo'
+      '8.500m² nave industrial · 2 plantas'
+      '12ha sector · 450 viviendas previstas'
+    Returns "" if nothing useful found.
+    """
+    t   = text.lower()
+    out = []
+
+    def _pn(s):
+        """Parse a number string like '4.200' or '4,200' or '4200'."""
+        try:
+            s = s.replace(".", "").replace(",", ".")
+            return float(s)
+        except Exception:
+            return None
+
+    # --- Viviendas / dwelling units ---
+    for pat in [
+        r'(\d{1,4})\s*(?:viviendas?|viv\.)',
+        r'(\d{1,4})\s*unidades?\s+(?:de\s+)?(?:vivienda|residencial)',
+        r'(\d{1,4})\s*(?:vpo|vppl|vpg|vpba)',
+    ]:
+        m = re.search(pat, t)
+        if m:
+            n = int(m.group(1))
+            if 1 <= n <= 5000:
+                out.append(f"{n} viviendas")
+            break
+
+    # --- Built m² ---
+    for pat in [
+        r'superficie\s+(?:total\s+)?constru[íi]da[^\d]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{1,2})?)\s*m[2²]',
+        r'(?:techo\s+)?edificabilidad[^\d]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{1,2})?)\s*m[2²]',
+        r'([0-9]{2,3}(?:[.,][0-9]{3})+)\s*m[2²]\s+(?:de\s+)?(?:construcci[oó]n|edificaci[oó]n|techo)',
+        r'construidos?[^\d]*([0-9]{2,3}(?:[.,][0-9]{3})*)\s*m[2²]',
+    ]:
+        m = re.search(pat, t)
+        if m:
+            v = _pn(m.group(1))
+            if v and 50 < v < 500_000:
+                out.append(f"{int(v):,}m² const.".replace(",", "."))
+            break
+
+    # --- Plot / sector m² ---
+    for pat in [
+        r'superficie\s+(?:neta\s+)?(?:de\s+)?(?:actuaci[oó]n|sector|parcela|suelo)[^\d]*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{1,2})?)\s*m[2²]',
+        r'([0-9]{1,3}(?:[.,][0-9]{3})+)\s*m[2²]\s+(?:de\s+)?(?:superficie|suelo|sector|actuaci)',
+        r'(?:suelo|sector)\s+de\s+([0-9]{1,3}(?:[.,][0-9]{3})*)\s*m[2²]',
+    ]:
+        m = re.search(pat, t)
+        if m:
+            v = _pn(m.group(1))
+            if v and 500 < v < 20_000_000:
+                label = "sector" if "sector" in t[max(0, m.start()-30):m.start()+30] else "parcela"
+                out.append(f"{int(v):,}m² {label}".replace(",", "."))
+            break
+
+    # --- Hectáreas ---
+    m = re.search(r'([0-9]+(?:[.,][0-9]+)?)\s*(?:ha|hect[aá]reas?)', t)
+    if m:
+        v = _pn(m.group(1))
+        if v and 0.01 < v < 5000:
+            if v >= 1: out.append(f"{v:.1f} ha")
+            else:      out.append(f"{v*10000:.0f}m² ({v:.2f}ha)")
+
+    # --- Plantas / floors ---
+    for pat in [
+        r'(\d{1,2})\s*plantas?\s+(?:sobre\s+rasante|sobre\s+suelo|s\.r\.|sr)',
+        r'(?:planta\s+)?b\s*\+\s*(\d{1,2})',
+        r'altura\s+(?:de\s+)?(\d{1,2})\s*plantas?',
+    ]:
+        m = re.search(pat, t)
+        if m:
+            n = int(m.group(1))
+            if 1 <= n <= 50:
+                out.append(f"B+{n}")
+            break
+
+    # --- Garaje / parking ---
+    m = re.search(r'(\d{1,4})\s*plazas?\s+(?:de\s+)?(?:garaje|aparcamiento|parking)', t)
+    if m:
+        n = int(m.group(1))
+        if 1 <= n <= 10000:
+            out.append(f"{n} plz. garaje")
+
+    # --- Industrial / nave m² ---
+    for pat in [
+        r'nave\s+(?:industrial|logística|almacén)[^\d]*([0-9]{1,3}(?:[.,][0-9]{3})*)\s*m[2²]',
+        r'([0-9]{1,3}(?:[.,][0-9]{3})+)\s*m[2²]\s+(?:de\s+)?nave',
+    ]:
+        m = re.search(pat, t)
+        if m and not any("vivienda" in x for x in out):
+            v = _pn(m.group(1))
+            if v and 100 < v < 500_000:
+                out.append(f"{int(v):,}m² nave".replace(",", "."))
+            break
+
+    return " · ".join(out) if out else ""
+
+def _ai_extract_project_size(text, permit_type="", description=""):
+    """Ask GPT-4o-mini to extract project size when regex finds nothing."""
+    if not USE_AI: return ""
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        t_len = len(text)
+        sample = text[:2500] + ("\n...\n" + text[-1500:] if t_len > 4000 else "")
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content":
+                f"Proyecto: {permit_type}. Descripción: {description[:300]}\n\nTexto:\n{sample[:4000]}\n\n"
+                "Extrae en UNA línea compacta los datos físicos del proyecto: m² construidos, "
+                "m² parcela/sector, número de viviendas, plantas, plazas de garaje, longitud de viales. "
+                "Ejemplo: '48 viviendas · 4.200m² const. · B+5 · 48 plz. garaje'. "
+                "Si no hay datos físicos útiles, responde exactamente: ninguno"}],
+            temperature=0, max_tokens=80)
+        r = resp.choices[0].message.content.strip()
+        return "" if r.lower() in ("ninguno", "none", "") else r[:200]
+    except Exception:
+        return ""
+
 def _ai_estimate_pem(text, permit_type="", municipality="Madrid", description=""):
     """
     Ask GPT-4o-mini to estimate PEM when the heuristic extractor finds nothing.
-    Uses project type, location, description and any text clues (m², floors, use type)
-    to give a calibrated range based on 2024-2025 Madrid construction reference rates.
-    Returns a formatted string for the Estimated PEM column.
-    Never raises — falls back to ⚪ string on any error.
+    ALWAYS produces a range — never returns ⚪ unless the document is genuinely a
+    non-construction announcement (budget note, administrative resolution, etc.).
+
+    Key improvements vs. v1:
+    - Uses first 2000 + middle 2000 + last 2000 chars of text (captures financial
+      tables that are usually at the end of BOCM PDFs)
+    - Madrid COAM 2026 reference rates (Módulo M=1.050€, updated IPC Oct-2025)
+    - ICIO base imponible = PEM exactly (Ley TRLCI art.101) — extracted if present
+    - Explicit reasoning chain: AI must state what data it found before estimating
+    - Output format: just "€X.XM – €Y.YM" (as requested) for the column cell
     """
     if not USE_AI: return "⚪ Sin datos PEM en BOCM"
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
 
-        prompt = f"""Eres un aparejador senior en Madrid especializado en presupuesto de ejecución material (PEM).
-Tu tarea: estimar el PEM de este proyecto basándote en todos los datos disponibles.
+        # Extract the most information-dense sections of the text:
+        # beginning (project description), middle (tables), end (financial summary)
+        t_len = len(text)
+        if t_len <= 6000:
+            text_sample = text
+        else:
+            text_sample = (text[:2500] + "\n...\n"
+                           + text[t_len//2 - 1000: t_len//2 + 1000] + "\n...\n"
+                           + text[-2500:])
 
-TIPO DE PROYECTO: {permit_type}
-MUNICIPIO: {municipality}
-DESCRIPCIÓN: {description[:800]}
+        prompt = f"""Eres un aparejador colegiado en Madrid con 20 años de experiencia valorando obras.
+Debes estimar el Presupuesto de Ejecución Material (PEM) de este proyecto.
 
-TEXTO DEL BOCM / PDF (puede contener m², plantas, viviendas, uso, etc.):
-{text[:3000]}
+DATOS DEL PROYECTO:
+- Tipo: {permit_type}
+- Municipio: {municipality}
+- Descripción: {description[:600]}
 
-INSTRUCCIONES:
-1. Extrae TODOS los datos cuantitativos del texto: m² construidos, m² de suelo, número de viviendas, plantas sobre rasante, plazas de garaje, uso (residencial/industrial/terciario), etc.
-2. Aplica los módulos orientativos del COAM 2024 para Madrid:
-   - Vivienda libre nueva: €1.100–€1.600/m² construido
-   - VPO / vivienda protegida: €900–€1.100/m²
-   - Rehabilitación integral: €700–€1.100/m²
-   - Nave industrial nueva: €350–€600/m²
-   - Urbanización (viales, redes): €80–€200/m² de sector
-   - Local comercial / terciario: €800–€1.200/m²
-   - Garaje sótano: €400–€600/m²
-   - Oficinas: €900–€1.300/m²
-3. Considera la ley de rendimientos: proyectos en municipios prime de Madrid (Pozuelo, Las Rozas, Majadahonda) +15–20%; proyectos en municipios periféricos −10–15%.
-4. Si hay datos insuficientes para una estimación razonable, dilo explícitamente.
+TEXTO DEL BOCM / PDF:
+{text_sample[:5500]}
 
-RESPONDE SOLO con un JSON con estos campos exactos (sin texto extra):
+INSTRUCCIONES DE VALORACIÓN (sigue ESTE orden):
+
+PASO 1 — BUSCAR PEM EXPLÍCITO:
+Busca en el texto cualquiera de estas expresiones:
+- "base imponible" + número = PEM EXACTO (por ley TRLCI art.101, base ICIO = PEM)
+- "presupuesto de ejecución material", "p.e.m", "PEM:"
+- "presupuesto total de las obras", "importe de licitación", "valor estimado del contrato"
+- Etapas numeradas con importes: "Etapa 1: X€, Etapa 2: Y€" → suma = PEM total
+Si encuentras cualquiera de estos, úsalo directamente como PEM y pon confidence: "high".
+
+PASO 2 — EXTRAER INDICADORES CUANTITATIVOS:
+Anota cualquier número útil: m² de parcela, m² construidos, número de viviendas,
+número de plantas, plazas de garaje, hectáreas, unidades de actuación, longitud de viales.
+
+PASO 3 — CALCULAR CON MÓDULOS COAM MADRID 2026 (Módulo base M = 1.050€/m²):
+Aplica el coeficiente Cm según tipo:
+- Vivienda libre nueva (plurifamiliar): Cm = 1,15 → ~€1.210/m² construido
+- VPO / vivienda protegida: Cm = 0,90 → ~€945/m²
+- Rehabilitación integral: Cm = 0,75–0,95 → €790–€1.000/m²
+- Oficinas / terciario: Cm = 1,10 → ~€1.155/m²
+- Local comercial / supermercado: Cm = 0,80 → ~€840/m²
+- Hotel: Cm = 1,20 → ~€1.260/m²
+- Nave industrial nueva: Cm = 0,40 → ~€420/m²
+- Nave logística / almacén: Cm = 0,35 → ~€370/m²
+- Garaje sótano: Cm = 0,45 → ~€472/m² útil
+- Urbanización (viales, redes servicios): €85–€180/m² de superficie neta de actuación
+- Demolición: €15–€25/m³ de volumen edificado
+- Movimiento de tierras: €8–€20/m³ excavado
+Ajuste por municipio: Madrid capital +10%; Pozuelo/Las Rozas/Majadahonda +15%; Municipios <50.000 hab. −10%.
+
+PASO 4 — SI NO HAY DATOS NUMÉRICOS:
+Estima por analogía con proyectos típicos del tipo en la zona:
+- Plan especial en municipio medio Madrid: €2M–€8M
+- Urbanización sector residencial 50.000m²: €4M–€12M
+- Edificio plurifamiliar 20 viviendas Madrid: €2.5M–€4M
+- Nave industrial 5.000m²: €1.5M–€3M
+- Rehabilitación integral edificio: €0.8M–€2.5M
+NUNCA devuelvas rango >4× el valor bajo (si bajo = €1M, alto máx €4M).
+
+RESPONDE ÚNICAMENTE con este JSON (sin texto adicional ni backticks):
 {{
-  "estimated_range": "€X.XM–€Y.YM",
-  "midpoint_eur": <número entero en euros>,
-  "method": "breve descripción del método (ej: '85 viv × 90m² × 1.250€/m²')",
-  "confidence": "high|medium|low",
-  "notes": "máx 60 chars con supuestos clave"
+  "pem_range": "€X.XM – €Y.YM",
+  "midpoint_eur": <entero>,
+  "basis": "<qué dato usaste: 'base imponible €X', '85 viv × 90m² × €1.210', '50.000m² urb × €120', 'analogía tipo proyecto', etc.>",
+  "confidence": "high|medium|low"
 }}
-
-Si no hay suficientes datos para estimar, usa midpoint_eur: 0 y explica en notes.
+Notas: usa M para millones (€1.2M), K para miles (€850K). Si PEM es <€100K devuelve midpoint_eur:0.
 """
+
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=300,
+            max_tokens=250,
             response_format={"type": "json_object"},
         )
         raw = resp.choices[0].message.content.strip()
         d   = json.loads(raw)
         mid = d.get("midpoint_eur", 0)
-        if mid and isinstance(mid, (int, float)) and mid > 10_000:
-            rng = d.get("estimated_range", "")
-            mth = d.get("method", "Estimación IA")
-            conf = d.get("confidence", "low")
-            notes = d.get("notes", "")
-            conf_emoji = "🟢" if conf == "high" else "🟡" if conf == "medium" else "🔴"
-            label = f"Estimación IA: {rng} · {mth}"
-            if notes: label += f" ({notes})"
-            label += f" {conf_emoji}"
-            return label
+        if mid and isinstance(mid, (int, float)) and mid >= 100_000:
+            rng   = d.get("pem_range", "")
+            basis = d.get("basis", "")
+            conf  = d.get("confidence", "low")
+            # Return ONLY the clean range for the cell — matches requested format
+            out = rng if rng else (
+                f"€{mid/1_000_000:.1f}M" if mid >= 1_000_000 else f"€{mid/1000:.0f}K"
+            )
+            # Append confidence tag compactly
+            conf_tag = " 🟢" if conf == "high" else " 🟡" if conf == "medium" else " 🔴"
+            return out + conf_tag
         else:
             return "⚪ Sin datos PEM en BOCM"
     except Exception as ex:
@@ -2346,6 +2530,7 @@ HDRS = [
     "Maps Link","Description","Source URL","PDF URL",
     "Mode","Confidence","Date Found","Lead Score","Expediente","Phase",
     "Estimated PEM","AI Evaluation","Supplies Needed","Profile Fit","Fuente",
+    "Project Size",   # Col W — m², viviendas, plantas, or AI size estimate
 ]
 _ws             = None
 _seen_urls      = set()
@@ -2449,6 +2634,7 @@ def write_permit(p, pdf_url=""):
             (p.get("supplies_needed") or "")[:600],  # Increased from 300 to 600
             profile_fit_str,  # Profile Fit column
             fuente,           # Fuente: BOCM or BOE — for filtering in sheet
+            (p.get("project_size") or ""),  # Project Size: m², viviendas, plantas
         ]
 
         try:
@@ -2512,37 +2698,60 @@ def process_one(url, idx, total):
             if dec and isinstance(dec, (int, float)) and dec > 0:
                 p["estimated_pem"] = f"✅ PEM confirmado: €{dec:,.0f}"
             else:
-                # Step 1: heuristic estimator from m²/units/floors
+                # Always fetch the full PDF text for PEM estimation —
+                # financial tables are usually at the END of BOCM PDFs
                 pdf_text = text
-                if pdf_url and "[TABLA_PARCELAS]" not in text and "[PÁG." not in text:
+                if pdf_url:
                     pdf_text_full = extract_pdf_text_enhanced(pdf_url)
-                    if pdf_text_full and len(pdf_text_full) > len(text):
-                        pdf_text = pdf_text_full
+                    if pdf_text_full and len(pdf_text_full) > 200:
+                        pdf_text = pdf_text_full   # always prefer full PDF text
+                    elif "[PÁG." not in text:
+                        # text came from JSON-LD — try lightweight PEM scan too
+                        pem_only = _fetch_pem_only_from_pdf(pdf_url)
+                        if pem_only: pdf_text = text + "\n\n" + pem_only
+
                 est_result = _estimate_pem_from_pdf(pdf_text)
                 if est_result.get("estimated_pem"):
                     ep  = est_result["estimated_pem"]
                     mth = est_result.get("method", "estimación")
                     bas = est_result.get("basis", "")
-                    p["estimated_pem"] = f"Estimación PEM: €{ep:,.0f} ({mth}; base: {bas})"
+                    ep_lo = est_result.get("estimated_pem_low")
+                    ep_hi = est_result.get("estimated_pem_high")
+                    def _fp(v):
+                        if v >= 1_000_000: return f"€{v/1_000_000:.1f}M"
+                        if v >= 1_000:     return f"€{int(v/1000)}K"
+                        return f"€{int(v):,}"
+                    rng_str = f"{_fp(ep_lo)} – {_fp(ep_hi)}" if ep_lo and ep_hi else f"€{ep:,.0f}"
+                    p["estimated_pem"] = rng_str + " 🟡"
                     if not dec:
                         p["declared_value_eur"] = ep
                         p["lead_score"] = score_lead(p)
-
                 elif USE_AI:
-                    # Step 2: AI-powered PEM estimation when heuristics find nothing
                     p["estimated_pem"] = _ai_estimate_pem(
                         pdf_text,
                         permit_type=p.get("permit_type", ""),
                         municipality=p.get("municipality", "Madrid"),
                         description=p.get("description", ""),
                     )
-                    # If AI found a numeric estimate, feed it into scoring
                     _ai_num = _parse_pem_from_estimated_string(p["estimated_pem"])
                     if _ai_num and not dec:
                         p["declared_value_eur"] = _ai_num
                         p["lead_score"] = score_lead(p)
                 else:
                     p["estimated_pem"] = "⚪ Sin datos PEM en BOCM"
+
+        # ── Extract project size (m², viviendas, plantas) ─────────────────────
+        if not p.get("project_size"):
+            # Use full pdf_text if available, else announcement text
+            _sz_text = locals().get("pdf_text", text) or text
+            p["project_size"] = _extract_project_size(_sz_text)
+            # If still empty, ask AI to extract it
+            if not p["project_size"] and USE_AI:
+                p["project_size"] = _ai_extract_project_size(
+                    _sz_text,
+                    permit_type=p.get("permit_type", ""),
+                    description=p.get("description", ""),
+                )
 
         # ── Ensure AI Evaluation and Supplies Needed are always populated ────────
         if not p.get("ai_evaluation") or len(str(p.get("ai_evaluation","")).strip()) < 20:
@@ -3506,16 +3715,15 @@ def process_boe_item(boe_id, title, department, idx, total):
                 est_result = _estimate_pem_from_pdf(text)
                 if est_result.get("estimated_pem"):
                     ep     = est_result["estimated_pem"]
-                    mth    = est_result.get("method", "estimación")
-                    bas    = est_result.get("basis", "")
                     ep_lo  = est_result.get("estimated_pem_low")
                     ep_hi  = est_result.get("estimated_pem_high")
                     def _fpb(v):
                         if v >= 1_000_000: return f"€{v/1_000_000:.1f}M"
                         if v >= 1_000:     return f"€{int(v/1000)}K"
                         return f"€{int(v):,}"
-                    pem_rng_b = (f"{_fpb(ep_lo)}–{_fpb(ep_hi)}" if ep_lo and ep_hi else f"€{ep:,.0f}")
-                    p["estimated_pem"] = f"Estimación PEM (BOE): {pem_rng_b} ({mth}; {bas})"
+                    rng_b = (f"{_fpb(ep_lo)} – {_fpb(ep_hi)}" if ep_lo and ep_hi
+                             else f"€{ep:,.0f}")
+                    p["estimated_pem"] = rng_b + " 🟡"
                     if not dec:
                         p["declared_value_eur"] = ep
                         p["lead_score"] = score_lead(p)
@@ -3532,7 +3740,17 @@ def process_boe_item(boe_id, title, department, idx, total):
                         p["lead_score"] = score_lead(p)
                 else:
                     p["estimated_pem"] = "⚪ Sin PEM en BOE"
-        
+
+        # ── Extract project size for BOE leads ───────────────────────────────
+        if not p.get("project_size"):
+            p["project_size"] = _extract_project_size(text)
+            if not p["project_size"] and USE_AI:
+                p["project_size"] = _ai_extract_project_size(
+                    text,
+                    permit_type=p.get("permit_type", ""),
+                    description=p.get("description", ""),
+                )
+
         # Ensure AI evaluation exists
         if not p.get("ai_evaluation") or len(str(p.get("ai_evaluation", "")).strip()) < 20:
             pt = (p.get("permit_type") or "").lower()
