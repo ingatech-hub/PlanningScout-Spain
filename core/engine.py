@@ -175,6 +175,22 @@ def normalise_url(url):
     if "boe.es" in url.lower(): return url
     return url
 
+def derive_pdf_url(url):
+    """
+    Derive the BOCM individual-announcement PDF URL from any BOCM URL.
+    Pattern (confirmed from live BOCM structure):
+      HTML:  https://www.bocm.es/bocm-20260401-96
+      PDF:   https://www.bocm.es/boletin/CM_Orden_BOCM/2026/04/01/BOCM-20260401-96.PDF
+    Returns None if the URL doesn't match the expected pattern.
+    """
+    if "boe.es" in url.lower(): return None
+    m = re.search(r'[Bb][Oo][Cc][Mm]-(\d{4})(\d{2})(\d{2})-(\d+)', url)
+    if m:
+        yyyy, mm, dd, num = m.group(1), m.group(2), m.group(3), m.group(4)
+        return (f"{BOCM_BASE}/boletin/CM_Orden_BOCM/{yyyy}/{mm}/{dd}"
+                f"/BOCM-{yyyy}{mm}{dd}-{num}.PDF")
+    return None
+
 # ════════════════════════════════════════════════════════════
 # BOCM SECTIONS
 # III = Ayuntamientos (licencias, urbanismo, contratos)
@@ -1730,6 +1746,20 @@ def classify_permit(text):
             "se expide licencia", "acuerdo de aprobación definitiva",
         ])
         if not has_definitive:
+            # TIER-6: Application-phase PRE-LEAD for retail and cambio de uso
+            # These documents ("se ha solicitado licencia de apertura/cambio de uso")
+            # are GOLD for retail expansion teams — they can contact the property
+            # owner/applicant MONTHS before the lease becomes public.
+            # Only capture if it's a commercial/retail activity with an address.
+            _is_retail_app = any(r in t for r in [
+                "cambio de uso", "licencia de apertura", "licencia ambiental",
+                "actividad de restauración", "apertura de establecimiento",
+                "uso terciario", "local comercial", "actividad comercial",
+                "licencia de actividad", "gran superficie", "centro comercial",
+                "actividad clasificada", "implantación de actividad",
+            ])
+            if _is_retail_app and any(r in t for r in ["calle ", "avenida ", "plaza ", "vía ", "paseo "]):
+                return True, "Tier-6: Pre-lead solicitud (retail/actividad)", 6
             return False, "Application phase (not granted)", 0
         # else: fall through — it's an approval that mentions past public period
 
@@ -1854,6 +1884,7 @@ def score_lead(p):
     elif phase == "adjudicacion":  score += 15  # contract awarded = most actionable
     elif phase == "en_obra":       score += 12  # on-site = urgent for suppliers
     elif phase == "inicial":       score -= 5
+    elif phase == "solicitud":     score += 3   # pre-lead — lower score, different value
 
     # Budget
     val = p.get("declared_value_eur")
@@ -2053,6 +2084,12 @@ def extract_pem_value(text):
 
 def detect_phase(text):
     t = text.lower()
+    # Pre-lead: application in progress (most common in retail/activity solicitudes)
+    if any(p in t for p in ["se ha solicitado licencia","ha solicitado licencia",
+                             "se solicita licencia de","lo que se hace público en cumplimiento"]):
+        # Only if no grant language — otherwise it's a later phase
+        if not any(g in t for g in ["se concede","se otorga","aprobación definitiva"]):
+            return "solicitud"
     # Most actionable first: contract awarded (adjudicación) or obra started/done
     if any(p in t for p in ["adjudicado a","contrato adjudicado","resolución de adjudicación",
                              "importe de adjudicación","precio de adjudicación"]):
@@ -2674,9 +2711,29 @@ def process_one(url, idx, total):
         text, pdf_url, pub_date, doc_title = fetch_announcement(url)
         if not text or len(text.strip()) < 40:
             return 0, 1, 0  # completely empty
-        if len(text.strip()) < 200 and pdf_url:
-            pf = extract_pdf_text_enhanced(pdf_url)
-            if pf and len(pf) > len(text): text = text + "\n\n" + pf
+
+        # ── Derive PDF URL deterministically if not found by fetch_announcement ──
+        # BOCM's JSON-LD often omits the encoding field, leaving pdf_url=None.
+        # The PDF URL pattern is 100% deterministic from the announcement ID.
+        if not pdf_url:
+            pdf_url = derive_pdf_url(url)
+
+        # ── Fetch full PDF text ONCE — used for text augmentation, PEM and size ──
+        # Always attempt even when we already have text: financial tables are at
+        # the END of BOCM PDFs, not in the JSON-LD summary text.
+        pdf_text = text   # default fallback
+        if pdf_url:
+            _pdf_full = extract_pdf_text_enhanced(pdf_url)
+            if _pdf_full and len(_pdf_full) > 200:
+                pdf_text = _pdf_full
+                # Augment short announcement text with PDF content
+                if len(text.strip()) < 200:
+                    text = text + "\n\n" + _pdf_full
+            else:
+                # PDF fetch failed/empty: try lightweight PEM-only scan
+                _pem_only = _fetch_pem_only_from_pdf(pdf_url)
+                if _pem_only:
+                    pdf_text = text + "\n\n" + _pem_only
 
         is_lead, reason, tier = classify_permit(text)
         if not is_lead:
@@ -2689,6 +2746,12 @@ def process_one(url, idx, total):
         if p is None:
             return 0, 1, 0  # skip
 
+        # Store tier so downstream blocks can adjust messaging
+        p["_tier"] = tier
+        # Pre-leads (Tier-6): mark phase as "solicitud" so dashboard can filter/badge them
+        if tier == 6 and not p.get("phase"):
+            p["phase"] = "solicitud"
+
         dec = p.get("declared_value_eur")
         if MIN_VALUE_EUR and dec and isinstance(dec,(int,float)) and dec < MIN_VALUE_EUR:
             return 0, 1, 0  # below minimum
@@ -2698,23 +2761,10 @@ def process_one(url, idx, total):
             if dec and isinstance(dec, (int, float)) and dec > 0:
                 p["estimated_pem"] = f"✅ PEM confirmado: €{dec:,.0f}"
             else:
-                # Always fetch the full PDF text for PEM estimation —
-                # financial tables are usually at the END of BOCM PDFs
-                pdf_text = text
-                if pdf_url:
-                    pdf_text_full = extract_pdf_text_enhanced(pdf_url)
-                    if pdf_text_full and len(pdf_text_full) > 200:
-                        pdf_text = pdf_text_full   # always prefer full PDF text
-                    elif "[PÁG." not in text:
-                        # text came from JSON-LD — try lightweight PEM scan too
-                        pem_only = _fetch_pem_only_from_pdf(pdf_url)
-                        if pem_only: pdf_text = text + "\n\n" + pem_only
-
+                # pdf_text is already fetched at the top of process_one
                 est_result = _estimate_pem_from_pdf(pdf_text)
                 if est_result.get("estimated_pem"):
-                    ep  = est_result["estimated_pem"]
-                    mth = est_result.get("method", "estimación")
-                    bas = est_result.get("basis", "")
+                    ep    = est_result["estimated_pem"]
                     ep_lo = est_result.get("estimated_pem_low")
                     ep_hi = est_result.get("estimated_pem_high")
                     def _fp(v):
@@ -2742,13 +2792,10 @@ def process_one(url, idx, total):
 
         # ── Extract project size (m², viviendas, plantas) ─────────────────────
         if not p.get("project_size"):
-            # Use full pdf_text if available, else announcement text
-            _sz_text = locals().get("pdf_text", text) or text
-            p["project_size"] = _extract_project_size(_sz_text)
-            # If still empty, ask AI to extract it
+            p["project_size"] = _extract_project_size(pdf_text)
             if not p["project_size"] and USE_AI:
                 p["project_size"] = _ai_extract_project_size(
-                    _sz_text,
+                    pdf_text,
                     permit_type=p.get("permit_type", ""),
                     description=p.get("description", ""),
                 )
@@ -2760,7 +2807,17 @@ def process_one(url, idx, total):
             pem  = p.get("declared_value_eur")
             pem_s = (f"€{pem/1_000_000:.1f}M" if pem and pem >= 1_000_000
                      else (f"€{int(pem/1000):.0f}K" if pem else "PEM no declarado"))
-            if "urbanización" in pt or "reparcelación" in pt:
+            _tier = p.get("_tier", 5)
+            if _tier == 6:
+                # Pre-lead: application phase, not yet granted
+                addr = p.get("address") or ""
+                p["ai_evaluation"] = (
+                    f"⚡ PRE-LEAD en {muni}{(' · ' + addr[:60]) if addr else ''}. "
+                    f"Solicitud de licencia de actividad/cambio de uso en tramitación — no concedida aún. "
+                    f"Ventana de oportunidad: contactar al propietario o solicitante AHORA, "
+                    f"antes de que aparezca el cartel de 'Se Alquila' y antes de que la competencia lo detecte. "
+                    f"Retail/restauración: evaluar si la ubicación encaja con criterios de expansión.")
+            elif "urbanización" in pt or "reparcelación" in pt:
                 p["ai_evaluation"] = (
                     f"Proyecto de urbanización definitivo en {muni} — {pem_s}. "
                     f"Gran Constructora y FCC-style deben pre-calificarse para futura licitación civil (estimado 12-24 meses). "
@@ -2779,7 +2836,7 @@ def process_one(url, idx, total):
                 p["ai_evaluation"] = (
                     f"Proyecto industrial en {muni} — {pem_s}. "
                     f"Oportunidad directa para instaladores eléctricos MT, PCI y suministradores de estructura metálica. "
-                    f"Kiloutou y empresas de alquiler: contactar al promotor antes del inicio de obra.")
+                    f"Empresas de alquiler de maquinaria: contactar al promotor antes del inicio de obra.")
             elif "nueva construcción" in pt or "rehabilitación" in pt:
                 p["ai_evaluation"] = (
                     f"Obra mayor en {muni} — {pem_s}. "
