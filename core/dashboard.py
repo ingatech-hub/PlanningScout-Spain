@@ -1679,7 +1679,7 @@ else:
 
 c1, c2 = st.columns(2)
 for col, (val, lbl, clr) in zip(
-    [c1, c2, c3],
+    [c1, c2],
     [
         (str(count),      "Proyectos detectados", "#1e3a5f"),
         (str(high_leads), "🟢 Prioritarios",      "#16a34a"),
