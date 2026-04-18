@@ -44,8 +44,8 @@ def time_ok(need_s=60):
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--client",  required=True)
-parser.add_argument("--weeks",   type=int, default=12,
-    help="1=daily(1-2 days), 2-3=weekly, 4+=full backfill")
+parser.add_argument("--weeks",   type=int, default=1,
+    help="1=daily(2 days), 2-3=weekly(81kw), 4+=full backfill(152kw)")
 parser.add_argument("--digest",  action="store_true")
 parser.add_argument("--resume",  action="store_true",
     help="Skip collection, process saved queue from previous run")
@@ -53,6 +53,10 @@ parser.add_argument("--backfill-ai", action="store_true",
     help="Re-run AI evaluation on existing sheet rows that have empty AI Evaluation column")
 parser.add_argument("--workers", type=int, default=4,
     help="Concurrent processing threads (default 4)")
+parser.add_argument("--max-pages-backfill", type=int, default=6,
+    help="Max pages per keyword chunk in backfill (full) mode. "
+         "Lower = faster but may miss tail pages. Default 6 (~90 results/chunk). "
+         "Use 10-15 for thorough backfill if time allows.")
 args = parser.parse_args()
 
 with open(args.client, "r", encoding="utf-8") as f:
@@ -66,12 +70,16 @@ OPENAI_API_KEY   = os.environ.get("OPENAI_API_KEY", "").strip()
 USE_AI           = bool(OPENAI_API_KEY)
 QUEUE_FILE       = "/tmp/bocm_queue.json"
 N_WORKERS        = max(1, min(args.workers, 8))
+# Max pages per keyword per date-chunk in backfill mode:
+# 6 pages × 10 results/page = up to 60 unique results per week-chunk per keyword.
+# The global dedup set means diminishing returns beyond page 4-6 anyway.
+MAX_PAGES_BACKFILL = args.max_pages_backfill
 
 # ── Run mode ──────────────────────────────────────────────────────────────────
-# DAILY  (--weeks 1)  : scan last 2 working days only. Target: 30-45 min.
-# WEEKLY (--weeks 2-3): scan all days in window + focused keywords. 1-2 hrs.
-# FULL   (--weeks 4+) : everything. 2-4 hrs. Use --resume for safety.
-MODE = "daily" if WEEKS_BACK <= 1 else ("weekly" if WEEKS_BACK <= 3 else "full")
+# DAILY  (--weeks 1)       : scan last 2 working days only. ~30-45 min.
+# WEEKLY (--weeks 2-8)     : scan all days in window + 81 focused keywords. ~2-4 hrs.
+# FULL   (--weeks 9+)      : everything, 152 keywords. Use only with --resume.
+MODE = "daily" if WEEKS_BACK <= 1 else ("weekly" if WEEKS_BACK <= 8 else "full")
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}|{elapsed_str()}] {msg}", flush=True)
@@ -245,235 +253,222 @@ def build_page_url(kw, d_from, d_to, page, sec=SECTION_III):
 # ════════════════════════════════════════════════════════════
 
 # (keyword, section, max_pages_per_chunk, profile_tag)
+# ── DESIGN PRINCIPLE ────────────────────────────────────────────────────────
+# Every keyword here must earn its place. Ask: "Does this term appear primarily
+# in BOCM documents worth capturing, or does it mostly pull noise?"
+# The Day Scan (SOURCE 1) already captures EVERYTHING published each day in
+# Section III. These keywords are supplementary — they catch documents that
+# use a specific term in a way the day scan might miss due to pagination.
+# RULE: if a keyword mostly pulls small commercial licences → remove it.
+#        if it pulls large-scale urbanismo/obra mayor → keep it.
+# ─────────────────────────────────────────────────────────────────────────────
 KW_WEEKLY = [
-    # ── Core licencias ─────────────────────────────────────────────────────────
-    ("obra mayor",              SECTION_III, 15, "ALL"),
-    ("licencia urbanística",    SECTION_III, 12, "ALL"),
-    ("declaración responsable", SECTION_III, 10, "ALL"),
+    # ── CORE LICENCIAS — highest signal, every profile benefits ──────────────
+    # "obra mayor" appears in every significant permit: new builds, rehab, industrial.
+    ("obra mayor",              SECTION_III, 12, "ALL"),
+    # "licencia urbanística" is the formal BOCM term — plans, urbanizaciones, big builds.
+    ("licencia urbanística",    SECTION_III, 10, "ALL"),
+    # "declaración responsable" is the fast-track licence (Ley 1/2020) for obra mayor.
+    ("declaración responsable", SECTION_III,  8, "ALL"),
 
-    # ── Urbanismo / plans ──────────────────────────────────────────────────────
+    # ── URBANISMO / PLANEAMIENTO — the core of the old database good results ──
+    # These are the keywords that produced all the big urbanización, plan especial,
+    # Las Tablas €106M, PAU-5 €108M, Tres Cantos €17M results.
     ("proyecto de urbanización", SECTION_III, 12, "PRO+CON"),
-    ("proyecto de urbanización", SECTION_II,   8, "PRO+CON"),
-    ("reparcelación",            SECTION_III, 10, "PRO"),
+    ("proyecto de urbanización", SECTION_II,   8, "PRO+CON"),  # CM-level plans
+    ("reparcelación",            SECTION_III, 10, "PRO+CON"),
     ("junta de compensación",    SECTION_III, 10, "PRO+CON"),
     ("plan parcial",             SECTION_III, 10, "PRO+CON"),
-    ("plan especial",            SECTION_III, 12, "PRO+CON+RET"),
+    ("plan especial",            SECTION_III, 12, "PRO+CON+RET+HOSPE"),  # also catches cambio de uso plans
     ("plan especial",            SECTION_II,   8, "PRO+CON"),
     ("aprobación definitiva",    SECTION_III, 12, "ALL"),
     ("modificación puntual",     SECTION_III,  8, "PRO+CON"),
     ("convenio urbanístico",     SECTION_III,  8, "PRO"),
-    ("estudio de detalle",       SECTION_III,  8, "PRO"),
+    ("estudio de detalle",       SECTION_III,  8, "PRO+CON"),
 
-    # ── Industrial / logistics ─────────────────────────────────────────────────
+    # ── INDUSTRIAL / LOGISTICS ────────────────────────────────────────────────
     ("nave industrial",          SECTION_III, 10, "IND+MAT"),
     ("plataforma logística",     SECTION_III,  8, "IND+MAT"),
     ("parque empresarial",       SECTION_III,  8, "IND+CON+MAT"),
     ("actividades productivas",  SECTION_III,  8, "IND+MAT"),
 
-    # ── Contracts / procurement ────────────────────────────────────────────────
+    # ── LICITACIONES / CONTRACTS ──────────────────────────────────────────────
     ("licitación de obras",      SECTION_III, 10, "CON+MAT+INFRA"),
     ("licitación de obras",      SECTION_II,  10, "CON+MAT+INFRA"),
     ("adjudicación de obras",    SECTION_III,  8, "CON+MAT"),
 
-    # ── ICIO — confirmed construction with exact PEM ───────────────────────────
+    # ── ICIO — confirmed construction, PEM confirmed by law ───────────────────
     ("base imponible",           SECTION_III, 10, "ALL"),
     ("base imponible",           SECTION_V,    8, "ALL"),
     ("liquidación icio",         SECTION_V,    8, "ALL"),
 
-    # ── Contribuciones especiales — CONFIRMED completed/active obras ─────────
-    ("contribuciones especiales", SECTION_III, 10, "MEP+MAT"),
+    # ── CONTRIBUCIONES ESPECIALES — live obra with confirmed budget + address ─
+    ("contribuciones especiales", SECTION_III, 10, "MEP+MAT+CON"),
 
-    # ── Licencia primera ocupación — building done, ready for fit-out/operation ─
-    # MEP needs to close contracts; hospe operators need to present management offer.
+    # ── PRIMERA OCUPACIÓN — building finished, MEP + hospitality window ───────
     ("primera ocupación",         SECTION_III, 10, "MEP+HOSPE"),
 
-    # ── Acta de recepción / liquidación — project complete (subcontract signal)
-    ("liquidación de obras",           SECTION_III,  8, "CON+MAT"),
-    ("resolución de adjudicación",     SECTION_III,  8, "CON+MAT"),
+    # ── OBRA COMPLETIONS — contract awarded or complete, call NOW ────────────
+    ("liquidación de obras",     SECTION_III,  8, "CON+MAT"),
+    ("resolución de adjudicación",SECTION_III, 8, "CON+MAT"),
 
-    # ── MEP — EU Next Generation rehabilitation (massive current opportunity) ──
+    # ── MEP / EU NEXT GENERATION REHABILITATION ───────────────────────────────
+    # EU-funded retrofits have confirmed budget. High quality for MEP installers.
     ("rehabilitación energética",      SECTION_III,  8, "MEP+MAT"),
     ("rehabilitación energética",      SECTION_II,   6, "MEP+MAT"),
     ("eficiencia energética edificio", SECTION_III,  6, "MEP+MAT"),
     ("programa de rehabilitación",     SECTION_III,  6, "MEP+MAT"),
 
-    # ── Rehabilitación integral + cambio de uso — WEEKLY (Sharing Co / Hospitality) ──
-    # These were wrongly in KW_EXTRA_FULL (backfill only). Moving to WEEKLY
-    # because they are the primary signal for flexliving / hospitality operators
-    # looking to acquire or manage buildings being converted or rehabilitated.
-    ("rehabilitación integral",        SECTION_III,  10, "MEP+MAT+HOSPE"),
-    ("cambio de uso",                  SECTION_III,  12, "MEP+RET+HOSPE"),
-    ("cambio de destino",              SECTION_III,   8, "RET+HOSPE"),   # common legal phrasing
-    ("uso residencial",                SECTION_III,   8, "HOSPE+MEP"),   # office→residential conversions
-    ("uso terciario hospedaje",        SECTION_III,   6, "HOSPE"),
-    ("apartamentos turísticos",        SECTION_III,   6, "HOSPE"),
-    ("viviendas de uso turístico",     SECTION_III,   6, "HOSPE"),
-    ("residencia de estudiantes",      SECTION_III,   6, "HOSPE+MEP"),
-    ("edificio de viviendas",          SECTION_III,   8, "HOSPE+MEP+CON"),
-    ("edificio plurifamiliar",         SECTION_III,  10, "HOSPE+MEP+CON"),  # also was only in EXTRA_FULL
-    ("nueva construcción",             SECTION_III,   8, "MEP+CON+MAT+HOSPE"),  # residential new builds
+    # ── REHABILITACIÓN INTEGRAL — whole building rehab (quality signal) ───────
+    # "rehabilitación integral" is highly specific → almost always a real project.
+    # Appears in BOCM for: building-scale rehab (obra mayor), not small shop fits.
+    ("rehabilitación integral",        SECTION_III,  8, "MEP+MAT+HOSPE+CON"),
+    # "reforma integral" is the same concept but different legal phrasing.
+    ("reforma integral",               SECTION_III,  8, "MEP+MAT+HOSPE+CON"),
+    # "obras de rehabilitación de edificio" — very BOCM-specific phrasing
+    ("obras de rehabilitación",        SECTION_III,  8, "MEP+MAT+HOSPE"),
 
-    # ── Room00 / Hospitality — hotel & hostel acquisitions (€400M pipeline) ───
-    # Room00 acquires and refurbishes hotels/hostels in Madrid prime micro-locations.
-    # They need: hotel cambio de uso, hostal rehab, establecimientos hoteleros, VUT.
-    ("establecimiento hotelero",       SECTION_III,   8, "HOSPE"),
-    ("licencia hotelera",              SECTION_III,   6, "HOSPE"),
-    ("actividad de hospedaje",         SECTION_III,   6, "HOSPE"),
-    ("hostal",                         SECTION_III,   6, "HOSPE+MEP"),
-    ("pensión",                        SECTION_III,   5, "HOSPE"),
-    ("hotel",                          SECTION_III,   8, "HOSPE+MEP+CON"),  # moved from EXTRA_FULL + HOSPE tag
-    ("rehabilitación de edificio",     SECTION_III,   8, "HOSPE+MEP+MAT"),
-    ("reforma de edificio",            SECTION_III,   6, "HOSPE+MEP"),
+    # ── CAMBIO DE USO — large-scale conversions (hospe, retail, residential) ──
+    # IMPORTANT: "cambio de uso" in KW_WEEKLY must have LOW max_pages (5) to
+    # avoid pulling small commercial shop conversions. The day scan already catches
+    # high-profile cambio de uso documents. These keywords catch niche phrasings.
+    # "plan especial de cambio de uso" is the most specific and highest-quality.
+    ("cambio de destino",              SECTION_III,  5, "RET+HOSPE"),
+    ("cambio de uso",                  SECTION_III,  5, "MEP+RET+HOSPE"),
 
-    # ── Malvón / Retail Food — small food retail 40-200m² in high foot-traffic ─
-    # Malvón needs: commercial activity licences with surface declared, centros
-    # comerciales, licencias de apertura in prime streets and transport hubs.
-    # Small locales (15-120m²) are their core footprint.
-    ("actividad de restauración",      SECTION_III,   8, "RET"),             # already present — confirm
-    ("local de restauración",          SECTION_III,   6, "RET"),
-    ("licencia de apertura",           SECTION_III,   8, "RET+HOSPE"),
-    ("local comercial",                SECTION_III,   8, "RET"),             # already in EXTRA_FULL — move up
-    ("uso terciario",                  SECTION_III,   8, "RET+HOSPE"),       # terciario covers retail+hospe
+    # ── LARGE RESIDENTIAL / PLURIFAMILIAR — hospe + MEP + constructora ────────
+    # "edificio plurifamiliar" = block of flats. Very high quality signal.
+    # "nueva construcción" = confirms a new building permit, not just an activity.
+    ("edificio plurifamiliar",         SECTION_III,  8, "HOSPE+MEP+CON"),
+    ("nueva construcción",             SECTION_III,  8, "MEP+CON+MAT+HOSPE"),
 
-    # ── ACTIU — office furniture: needs new office builds, fit-outs, coworking ─
-    # ACTIU's Commercial Director Madrid sells to whoever is fitting out offices.
-    # Best signals: new office buildings, office rehabilitations, coworking spaces,
-    # educational buildings, hospitality interiors (hotels they equip with contract furniture).
-    ("edificio de oficinas",           SECTION_III,   8, "ACTIU+RET+MEP"),
-    ("uso oficinas",                   SECTION_III,   6, "ACTIU+RET"),
-    ("coworking",                      SECTION_III,   6, "ACTIU+RET"),
-    ("espacio de trabajo",             SECTION_III,   5, "ACTIU"),
-    ("reforma de oficinas",            SECTION_III,   6, "ACTIU+MEP"),
-    ("adecuación de local",            SECTION_III,   6, "ACTIU+RET"),
-    ("edificio terciario",             SECTION_III,   6, "ACTIU+RET"),
-    ("centro de negocios",             SECTION_III,   5, "ACTIU+RET"),
+    # ── HOSPITALITY / HOTEL — Room00 + Sharing Co (large scale only) ─────────
+    # "hotel" returns mostly large-scale hotel obra mayor and new openings.
+    # "establecimiento hotelero" is the BOCM formal term for hotel licensing.
+    ("hotel",                          SECTION_III,  6, "HOSPE+MEP+CON"),
+    ("establecimiento hotelero",       SECTION_III,  6, "HOSPE"),
 
-    # ── Kinépolis — large-format leisure: needs major retail/commercial spaces ──
-    # Kinépolis opens multiplexes in shopping centres and standalone. Signals:
-    # large commercial surface (>1000m²), centros comerciales, ocio terciario.
-    ("gran superficie",                SECTION_III,   8, "RET+CON"),         # was EXTRA_FULL — move up
-    ("centro comercial",               SECTION_III,   8, "RET+CON"),         # was EXTRA_FULL — move up
-    ("actividad de ocio",              SECTION_III,   6, "RET"),
-    ("uso dotacional",                 SECTION_III,   6, "RET+CON"),
-    ("edificio de uso mixto",          SECTION_III,   6, "RET+HOSPE+CON"),
-    ("parque de ocio",                 SECTION_III,   5, "RET+CON"),
+    # ── LARGE COMMERCIAL / RETAIL — Kinépolis, Expansión Retail ─────────────
+    # "gran superficie" → always large scale (>1000m²), very high quality.
+    # "centro comercial" → shopping centres, multiplexes.
+    # Both are high quality because small shops don't use these terms.
+    ("gran superficie",                SECTION_III,  6, "RET+CON"),
+    ("centro comercial",               SECTION_III,  6, "RET+CON"),
 
-    # ── Promotores/RE — DIRs and major planning instruments ──────────────────
+    # ── OFFICES / MIXED USE — ACTIU + RE ─────────────────────────────────────
+    # "edificio de oficinas" = always large scale (office block), very specific.
+    # "edificio de uso mixto" = mixed use developments.
+    ("edificio de oficinas",           SECTION_III,  6, "ACTIU+RET+MEP"),
+    ("edificio de uso mixto",          SECTION_III,  5, "ACTIU+RET+HOSPE+CON"),
+
+    # ── INDUSTRIAL ACTIVITY — large scale only ────────────────────────────────
+    # "actividad clasificada" = requires environmental permit → always significant.
+    # "modificación sustancial" = major change to industrial installation.
+    # "instalación de maquinaria" = industrial equipment, MEP + alquiler opportunity.
+    # "licencia ambiental" = environmental licence for industrial activities.
+    ("licencia ambiental",             SECTION_III,  6, "RET+IND"),
+    ("actividad clasificada",          SECTION_III,  6, "IND+MEP"),
+    ("modificación sustancial",        SECTION_III,  5, "IND+MEP"),
+    ("instalación de maquinaria",      SECTION_III,  5, "IND+MEP"),
+
+    # ── PROMOTORES/RE — land development instruments ─────────────────────────
     ("declaración de interés regional",SECTION_II,   8, "PRO+INFRA"),
-    ("actuación de dotación",          SECTION_III,  6, "PRO"),
-    ("proyecto de actuación especial", SECTION_III,  6, "PRO+CON"),  # Ley 7/2024
+    ("actuación de dotación",          SECTION_III,  5, "PRO"),
+    ("proyecto de actuación especial", SECTION_III,  5, "PRO+CON"),
 
-    # ── Retail — activity licensing and openings ──────────────────────────────
-    ("apertura de establecimiento",    SECTION_III,  8, "RET"),
-    ("licencia ambiental",             SECTION_III,  8, "RET+IND"),
-
-    # ── Industrial — classified activities and expansions ────────────────────
-    ("actividad clasificada",          SECTION_III,  8, "IND+MEP"),
-    ("modificación sustancial",        SECTION_III,  6, "IND+MEP"),
-    ("instalación de maquinaria",      SECTION_III,  6, "IND+MEP"),
-
-    # ── Gran Infraestructura — BOE-level infrastructure ──────────────────────
+    # ── GRAN INFRAESTRUCTURA ──────────────────────────────────────────────────
     ("obra civil",                     SECTION_II,   8, "INFRA+CON"),
     ("infraestructura hidráulica",     SECTION_II,   6, "INFRA"),
     ("saneamiento colector",           SECTION_III,  6, "INFRA+CON+MAT"),
 ]
 
 KW_EXTRA_FULL = [
-    # Additional keywords for full backfill only.
-    # RULE: any term already in KW_WEEKLY (any section) is NOT repeated here.
+    # Additional keywords for full backfill only (--weeks 9+).
+    # RULE: terms already in KW_WEEKLY (any section) are NOT repeated here.
+    # These are either lower-signal, more niche, or too noisy for weekly scanning.
+    # ── Core licencias (additional phrasings) ──────────────────────────────────
     ("licencia de edificación",  SECTION_III,  8, "ALL"),
     ("autorización de obras",    SECTION_III,  8, "ALL"),
     ("se expide licencia",       SECTION_III,  8, "ALL"),
     ("nueva planta",             SECTION_III,  8, "MEP+CON+MAT"),
     ("demolición",               SECTION_III,  6, "CON+IND"),
-    ("residencia de mayores",    SECTION_III,  6, "MEP+HOSPE"),
-    ("centro de salud",          SECTION_III,  6, "MEP"),
-    ("instalación de ascensor",  SECTION_III,  6, "MEP"),
-    ("licencia de actividad",    SECTION_III,  8, "RET+IND"),
+    # ── Hospitality niche (lower volume, room00/sharing co) ───────────────────
+    ("hostal",                   SECTION_III,  5, "HOSPE"),
+    ("pensión",                  SECTION_III,  4, "HOSPE"),
+    ("residencia de estudiantes",SECTION_III,  5, "HOSPE+MEP"),
+    ("residencia de mayores",    SECTION_III,  5, "MEP+HOSPE"),
+    ("apartamentos turísticos",  SECTION_III,  5, "HOSPE"),
+    ("viviendas de uso turístico",SECTION_III, 5, "HOSPE"),
+    ("rehabilitación de edificio",SECTION_III, 6, "HOSPE+MEP+MAT"),
+    # ── Offices / ACTIU (less frequent in BOCM) ───────────────────────────────
+    ("coworking",                SECTION_III,  5, "ACTIU+RET"),
+    ("edificio terciario",       SECTION_III,  5, "ACTIU+RET"),
+    ("uso oficinas",             SECTION_III,  5, "ACTIU+RET"),
+    # ── MEP — specific installations (low frequency but high precision) ────────
+    ("instalación de ascensor",  SECTION_III,  5, "MEP"),
+    ("centro de salud",          SECTION_III,  5, "MEP"),
+    # ── Industrial / logistics (niche terms) ─────────────────────────────────
     ("almacén",                  SECTION_III,  8, "IND+MAT"),
     ("polígono industrial",      SECTION_III,  8, "IND+MAT"),
-    ("centro de distribución",   SECTION_III,  6, "IND+MAT"),
-    ("zona logística",           SECTION_III,  6, "IND+MAT"),
-    # plan parcial SECTION_II and junta de compensación SECTION_II (complement SECTION_III weekly entries)
+    ("centro de distribución",   SECTION_III,  5, "IND+MAT"),
+    ("zona logística",           SECTION_III,  5, "IND+MAT"),
+    # ── Urbanismo (Section II complements for weekly Section III searches) ─────
     ("plan parcial",             SECTION_II,   8, "PRO+CON"),
     ("junta de compensación",    SECTION_II,   8, "PRO+CON"),
     ("obras de urbanización",    SECTION_III,  8, "CON+MAT"),
-    # contrato de obras: SECTION_III only (SECTION_II already in INFRA block above)
     ("contrato de obras",        SECTION_III,  8, "CON+MAT"),
-    ("valor estimado",           SECTION_III,  8, "CON+MAT"),
-    ("impuesto construcciones",  SECTION_V,    6, "ALL"),
-    ("notificación tributaria",  SECTION_V,    6, "ALL"),
-    ("sector de suelo",          SECTION_III,  6, "PRO+CON"),
-    ("suelo urbanizable",        SECTION_III,  6, "PRO+CON"),
-    ("modificación del plan",    SECTION_II,   6, "PRO+CON"),
-    # ── FCC / Gran Infraestructura ────────────────────────────────────────────
-    ("obras de infraestructura", SECTION_III,  8, "INFRA+CON"),
-    ("concesión de obra",        SECTION_III,  8, "INFRA+CON"),
-    # aprobación definitiva SECTION_II complements SECTION_III in weekly
-    ("aprobación definitiva",    SECTION_II,  10, "INFRA+CON"),
     ("contrato de obras",        SECTION_II,   8, "INFRA+CON"),
-    # licitación de obras: already in KW_WEEKLY with INFRA tag — not repeated
-    # ── Kiloutou / Alquiler Maquinaria ────────────────────────────────────────
-    ("obras de reforma",         SECTION_III,  8, "ALQUILER+MAT"),
-    ("obras de adecuación",      SECTION_III,  6, "ALQUILER"),
-    ("obras de ampliación",      SECTION_III,  6, "ALQUILER+MEP"),
-    # nueva construcción SECTION_II: already in KW_WEEKLY — not repeated
-
-    # ── MEP-specific (confirmed buildings with systems to install) ─────────
-    ("instalación eléctrica",    SECTION_III,  6, "MEP"),
-    ("instalación fontanería",   SECTION_III,  5, "MEP"),
-    ("instalación climatización",SECTION_III,  5, "MEP"),
-    ("instalación ascensor",     SECTION_III,  6, "MEP"),
-    ("sala de máquinas",         SECTION_III,  5, "MEP"),
-    ("vivienda protegida",       SECTION_III,  8, "MEP+CON"),
-    ("residencia universitaria", SECTION_III,  6, "MEP+CON+HOSPE"),
-    ("viviendas de protección",  SECTION_III,  8, "MEP+CON"),
-
-    # ── Retail / Expansión ─────────────────────────────────────────────────
-    ("superficie útil",          SECTION_III,  6, "RET"),
-    # apertura de establecimiento: already in KW_WEEKLY — not repeated
-    ("implantación de actividad",SECTION_III,  6, "RET+MEP"),
-
-    # ── Industrial / Logistics ──────────────────────────────────────────────
-    ("centro de datos",             SECTION_III,  6, "IND+MEP+MAT"),
-    ("data center",                 SECTION_III,  5, "IND+MEP"),
-    ("depósito",                    SECTION_III,  5, "IND+MAT"),
-    ("cámara frigorífica",          SECTION_III,  5, "IND+MEP"),
-    ("instalación fotovoltaica",    SECTION_III,  6, "IND+MEP"),
-    ("zona industrial",             SECTION_III,  6, "IND+MAT"),
-    ("obras de accesibilidad",      SECTION_III,  6, "ALQUILER+MEP"),
-    ("vivienda de protección oficial", SECTION_III, 8, "MEP+CON"),
-    ("vivienda pública en alquiler",   SECTION_III, 8, "MEP+CON"),
-    ("acta de recepción",           SECTION_III,  8, "CON+MAT"),
-    ("centro de procesamiento de datos", SECTION_III, 5, "IND+MEP+MAT"),
-    ("contribuciones especiales obras", SECTION_V, 6, "ALL"),
-    ("hub logístico",               SECTION_III,  5, "IND+MAT"),
-    ("planta de tratamiento",       SECTION_III,  5, "IND+MEP+MAT"),
-
-    # ── Promotores/RE ────────────────────────────────────────────────────────
-    ("segregación de finca",        SECTION_III,  6, "PRO"),
-    ("segregación de parcela",      SECTION_III,  6, "PRO"),
-    ("normalización de fincas",     SECTION_III,  6, "PRO"),
-    ("agrupación de fincas",        SECTION_III,  6, "PRO"),
-    ("suelo no urbanizable",        SECTION_III,  5, "PRO"),
-
-    # ── MEP — EU-funded building upgrades ───────────────────────────────────
-    ("aislamiento térmico",         SECTION_III,  6, "MEP+MAT"),
-    ("instalación placas solares",  SECTION_III,  6, "MEP+IND"),
-    ("aerotermia",                  SECTION_III,  5, "MEP"),
-    ("bomba de calor",              SECTION_III,  5, "MEP"),
-    ("ventilación mecánica",        SECTION_III,  5, "MEP"),
-
-    # ── BOE — state-level infrastructure ────────────────────────────────────
-    ("obra de infraestructura",     SECTION_II,  10, "INFRA+CON"),
-    ("concesión administrativa",    SECTION_II,   6, "INFRA+PRO"),
-    ("contrato de concesión",       SECTION_II,   6, "INFRA"),
-
-    # ── Alquiler Maquinaria — earthworks ────────────────────────────────────
-    ("movimiento de tierras",       SECTION_III,  6, "ALQUILER+CON"),
-    ("vaciado de solar",            SECTION_III,  5, "ALQUILER+CON"),
-    ("desescombro",                 SECTION_III,  5, "ALQUILER"),
-    ("explanación",                 SECTION_III,  5, "ALQUILER+CON"),
+    ("valor estimado",           SECTION_III,  8, "CON+MAT"),
+    ("impuesto construcciones",  SECTION_V,    5, "ALL"),
+    ("notificación tributaria",  SECTION_V,    5, "ALL"),
+    ("sector de suelo",          SECTION_III,  5, "PRO+CON"),
+    ("suelo urbanizable",        SECTION_III,  5, "PRO+CON"),
+    ("modificación del plan",    SECTION_II,   5, "PRO+CON"),
+    ("obras de infraestructura", SECTION_III,  6, "INFRA+CON"),
+    ("concesión de obra",        SECTION_III,  6, "INFRA+CON"),
+    ("aprobación definitiva",    SECTION_II,   8, "INFRA+CON"),
+    # ── Alquiler Maquinaria (earthworks signals) ───────────────────────────────
+    ("obras de reforma",         SECTION_III,  6, "ALQUILER+MAT"),
+    ("obras de adecuación",      SECTION_III,  5, "ALQUILER"),
+    ("obras de ampliación",      SECTION_III,  5, "ALQUILER+MEP"),
+    # ── MEP specific installations ─────────────────────────────────────────────
+    ("instalación eléctrica",    SECTION_III,  5, "MEP"),
+    ("instalación fontanería",   SECTION_III,  4, "MEP"),
+    ("instalación climatización",SECTION_III,  4, "MEP"),
+    ("sala de máquinas",         SECTION_III,  4, "MEP"),
+    ("vivienda protegida",       SECTION_III,  6, "MEP+CON"),
+    ("residencia universitaria", SECTION_III,  5, "MEP+CON+HOSPE"),
+    ("viviendas de protección",  SECTION_III,  6, "MEP+CON"),
+    # ── Retail / activity (with surface threshold in classifier) ──────────────
+    # "apertura de establecimiento" is kept in EXTRA_FULL only — too noisy weekly.
+    ("apertura de establecimiento",SECTION_III, 5, "RET"),
+    ("implantación de actividad", SECTION_III, 5, "RET+MEP"),
+    ("superficie útil",           SECTION_III, 4, "RET"),
+    # ── Industrial extras ─────────────────────────────────────────────────────
+    ("centro de datos",             SECTION_III,  5, "IND+MEP+MAT"),
+    ("instalación fotovoltaica",    SECTION_III,  5, "IND+MEP"),
+    ("zona industrial",             SECTION_III,  5, "IND+MAT"),
+    ("obras de accesibilidad",      SECTION_III,  5, "ALQUILER+MEP"),
+    ("vivienda de protección oficial",SECTION_III, 6, "MEP+CON"),
+    ("acta de recepción",           SECTION_III,  6, "CON+MAT"),
+    ("contribuciones especiales obras",SECTION_V,  5, "ALL"),
+    ("hub logístico",               SECTION_III,  4, "IND+MAT"),
+    # ── Promotores/RE extras ─────────────────────────────────────────────────
+    ("segregación de finca",        SECTION_III,  5, "PRO"),
+    ("normalización de fincas",     SECTION_III,  5, "PRO"),
+    ("agrupación de fincas",        SECTION_III,  4, "PRO"),
+    # ── MEP — EU retrofits extras ─────────────────────────────────────────────
+    ("aislamiento térmico",         SECTION_III,  5, "MEP+MAT"),
+    ("aerotermia",                  SECTION_III,  4, "MEP"),
+    ("bomba de calor",              SECTION_III,  4, "MEP"),
+    # ── BOE state-level infrastructure ────────────────────────────────────────
+    ("obra de infraestructura",     SECTION_II,   8, "INFRA+CON"),
+    ("concesión administrativa",    SECTION_II,   5, "INFRA+PRO"),
+    # ── Alquiler Maquinaria earthworks ────────────────────────────────────────
+    ("movimiento de tierras",       SECTION_III,  5, "ALQUILER+CON"),
+    ("vaciado de solar",            SECTION_III,  4, "ALQUILER+CON"),
+    ("desescombro",                 SECTION_III,  4, "ALQUILER"),
+    ("explanación",                 SECTION_III,  4, "ALQUILER+CON"),
 ]
 
 # Logistics corridor municipalities for targeted bonus search in full mode
@@ -1612,6 +1607,7 @@ def fetch_announcement(url):
 # CLASSIFICATION — 5 stages
 # ════════════════════════════════════════════════════════════
 HARD_REJECT = [
+    # ── Pure admin / budget / HR — no construction content ────────────────────
     "convocatoria de subvención", "bases reguladoras para la concesión de ayudas",
     "ayuda económica", "aportación dineraria",
     "modificación presupuestaria", "suplemento de crédito",
@@ -1631,26 +1627,60 @@ HARD_REJECT = [
     "composición de las comisiones", "encomienda de gestión",
     "reglamento orgánico municipal",
     "eurotaxi", "autotaxi",
-    # "normas subsidiarias de urbanismo",  # too broad
     "criterio interpretativo vinculante",
     "corrección de errores del bocm", "corrección de hipervínculo",
     "licitación de servicios de", "licitación de suministro de",
     "contrato de servicios de limpieza", "contrato de mantenimiento de",
     "servicio de limpieza", "servicio de recogida",
-    # FINISHED projects (no more opportunity)
+    # Finished projects (no opportunity remains)
     "disolución de la junta de compensación",
     "disolver la junta de compensación",
-    # Noise: pure tax / admin with no construction content
+    # Pure tax / admin with no construction content
     "tasa de residuos", "tasa de basuras", "tasa por recogida",
-    "contribuciones por prestación de servicios",  # ≠ contribuciones especiales obras
+    "contribuciones por prestación de servicios",
     "impuesto sobre vehículos", "padrón municipal de habitantes",
     "tasa por utilización del dominio público",
     "ordenanza de tráfico", "ordenanza de movilidad",
     "subasta de bienes municipales", "enajenación de bienes",
     "permuta de bienes", "cesión de uso",
-    # BOE noise: service contracts (not construction)
     "servicios de limpieza integral", "servicios de vigilancia",
     "servicios de mantenimiento de jardines",
+    # ── SMALL COMMERCIAL LICENCES — always noise, never worth capturing ────────
+    # These activity types appear frequently in BOCM Section III as licencia de
+    # actividad or apertura de establecimiento. They are NOT construction leads.
+    # Any of these terms in the document text → reject immediately.
+    # Car repair / workshops (extremely common BOCM noise)
+    "taller de vehículos",
+    "taller de reparación de automóviles",
+    "taller de reparación de vehículos",
+    "taller de automóviles",
+    "taller de mecánica",
+    "taller de motos",
+    "taller de chapa",
+    "taller de pintura de vehículos",
+    # Printing / graphics (small commercial)
+    "artes gráficas",
+    "impresión gráfica",
+    "centro de impresiones",
+    "impresión digital",
+    "imprenta",
+    # Storage (trasteros are NOT warehouses)
+    "actividad de trasteros",
+    "licencia de trasteros",
+    "apertura de trasteros",
+    "uso de trasteros",
+    # Pharmacies (common in BOCM, never construction leads)
+    "apertura de farmacia",
+    "instalación de farmacia",
+    "licencia de farmacia",
+    # Very small personal services (already partly in SMALL_ACTIVITY but catch early)
+    "salón de tatuajes",
+    "sala de tatuajes",
+    # General admin noise
+    "expediente sancionador",
+    "resolución sancionadora",
+    "publicación de la lista definitiva",
+    "publicación de la lista provisional",
 ]
 
 APPLICATION_SIGNALS = [
@@ -1799,52 +1829,100 @@ CONSTRUCTION_SIGNALS = [
 ]
 
 SMALL_ACTIVITY = [
-    "peluquería", "barbería", "salón de belleza",
+    # ── Personal care ─────────────────────────────────────────────────────────
+    "peluquería", "barbería", "salón de belleza", "centro de estética",
+    "spa ", "centro de bronceado", "clínica de fisioterapia",
+    # ── Food retail (small) ───────────────────────────────────────────────────
     "pastelería", "panadería", "carnicería", "pescadería",
-    "frutería", "estanco", "locutorio", "quiosco",
-    "taller mecánico", "academia de idiomas", "academia de danza",
-    "centro de yoga", "pilates", "clínica dental", "consulta médica",
-    "farmacia", "bar ", "cafetería", "restaurante",
-    "heladería", "pizzería", "kebab",
+    "frutería", "estanco", "quiosco", "despacho de pan",
+    "charcutería", "ultramarinos", "colmado",
+    # ── Services (small) ─────────────────────────────────────────────────────
+    "locutorio", "gestoría", "asesoría fiscal",
+    "academia de idiomas", "academia de danza",
+    "centro de yoga", "pilates", "boxeo",
+    # ── Healthcare / wellness (small) ────────────────────────────────────────
+    "clínica dental", "consulta médica", "consulta veterinaria",
+    "óptica", "ortopedia",
+    # ── Food service (small) — bar/café/restaurant ONLY if no declared PEM > 500K
+    "bar ", "bar-", "café ", "cafetería", "pizzería", "kebab",
+    "heladería", "hamburguesería", "bocadillería",
+    # ── Retail (small) ────────────────────────────────────────────────────────
     "lavandería", "tintorería", "zapatería", "cerrajería",
-    "papelería", "floristería", "gestoría",
+    "papelería", "floristería", "bazar",
+    # ── Workshops (small) ─────────────────────────────────────────────────────
+    "taller de reparación de electrodomésticos",
+    "servicio técnico de electrodomésticos",
+    # ── Storage — vestuarios / trasteros (NOT warehouses) ─────────────────────
+    # These must be rejected when they appear alone without obra mayor context
+    "vestuarios y duchas",
+    "instalación de vestuarios",
+    # NOTE: "almacén" and "depósito" are NOT in SMALL_ACTIVITY because
+    # industrial warehouses (naves almacén) are valid leads.
 ]
+
+def _is_major_construction(text: str) -> bool:
+    """Returns True if text contains clear major construction signals.
+    Used to override SMALL_ACTIVITY rejection for large-scale projects."""
+    t = text.lower()
+    return any(p in t for p in [
+        "obra mayor", "proyecto de ejecución", "presupuesto de ejecución material",
+        "p.e.m", "base imponible del icio", "nueva construcción", "nueva planta",
+        "demolición y construcción", "rehabilitación integral", "reforma integral",
+        "edificio plurifamiliar", "bloque de viviendas", "viviendas",
+        "nave industrial", "centro comercial", "gran superficie",
+        "declaración responsable de obra mayor",
+    ])
 
 def classify_permit(text):
     """Returns (is_lead, reason, tier 1-5)."""
     t = text.lower()
 
-    # Hard reject unchanged
+    # ── Stage 1: Hard reject — admin noise ───────────────────────────────────
     for kw in HARD_REJECT:
         if kw in t: return False, f"Admin noise: '{kw}'", 0
 
+    # ── Stage 1b: Additional small-activity hard reject ───────────────────────
+    # These are too specific and always noise — check before the expensive signal pass.
+    # (These differ from SMALL_ACTIVITY in that they never have legitimate large-scale use.)
+    _noise_patterns = [
+        "licencia para farmacia", "apertura para farmacia",
+        "farmacia en calle", "farmacia en la calle", "farmacia en avenida",
+        "farmacia en la avenida", "farmacia en plaza",
+        "centro de impresiones", "impresión gráfica en",
+        "taller de vehículos en", "taller de automóviles en",
+        "licencia para pastelería", "pastelería en calle",
+        "vestuarios y muelle",
+    ]
+    for pat in _noise_patterns:
+        if pat in t: return False, f"Direct noise pattern: '{pat}'", 0
+
     app_count = sum(1 for kw in APPLICATION_SIGNALS if kw in t)
     if app_count >= 3:
-        # IMPORTANT: "aprobación definitiva" and explicit grant phrases override
-        # the application signal check. A valid approval document can legitimately
-        # reference the past public comment period ("durante el plazo de veinte días")
-        # as historical background. Only reject if there's NO definitive approval language.
         has_definitive = any(p in t for p in [
             "aprobación definitiva", "aprobar definitivamente",
             "se concede", "se otorga", "licencia concedida",
             "se expide licencia", "acuerdo de aprobación definitiva",
         ])
         if not has_definitive:
-            # TIER-6: Application-phase PRE-LEAD for retail and cambio de uso
-            # These documents ("se ha solicitado licencia de apertura/cambio de uso")
-            # are GOLD for retail expansion teams — they can contact the property
-            # owner/applicant MONTHS before the lease becomes public.
-            # Only capture if it's a commercial/retail activity with an address.
-            _is_retail_app = any(r in t for r in [
-                "cambio de uso", "licencia de apertura", "licencia ambiental",
-                "actividad de restauración", "apertura de establecimiento",
-                "uso terciario", "local comercial", "actividad comercial",
-                "licencia de actividad", "gran superficie", "centro comercial",
+            # TIER-6: Application-phase PRE-LEAD — only for LARGE-SCALE activities
+            # with a confirmed address. Explicitly exclude small shops and services.
+            _is_large_scale_app = any(r in t for r in [
+                "cambio de uso", "licencia ambiental",
+                "gran superficie", "centro comercial",
                 "actividad clasificada", "implantación de actividad",
+                "nave industrial", "almacén", "uso industrial",
             ])
-            if _is_retail_app and any(r in t for r in ["calle ", "avenida ", "plaza ", "vía ", "paseo "]):
-                return True, "Tier-6: Pre-lead solicitud (retail/actividad)", 6
-            return False, "Application phase (not granted)", 0
+            # Reject if it's a small personal service even if it has an address
+            _is_small_noise = any(r in t for r in [
+                "farmacia", "pastelería", "panadería", "peluquería",
+                "taller de vehículos", "taller de automóviles",
+                "impresión", "vestuarios", "trasteros", "pizzería",
+                "cafetería", "bar ", "kebab", "carnicería",
+            ])
+            if _is_large_scale_app and not _is_small_noise:
+                if any(r in t for r in ["calle ", "avenida ", "plaza ", "vía ", "paseo "]):
+                    return True, "Tier-6: Pre-lead solicitud (actividad grande)", 6
+            return False, "Application phase (not granted or small activity)", 0
         # else: fall through — it's an approval that mentions past public period
 
     for kw in DENIAL_SIGNALS:
@@ -1866,19 +1944,17 @@ def classify_permit(text):
         "obra mayor","nueva construcción","nueva planta","nave industrial",
         "proyecto de urbanización","rehabilitación integral","plan especial",
         "plan parcial","bloque de viviendas","junta de compensación",
-        "licitación de obras","base imponible"])
+        "licitación de obras","base imponible", "reforma integral",
+        "edificio plurifamiliar", "edificio de viviendas"])
     if not has_major:
-        # Only reject small activity if no significant surface area is declared.
-        # A chain restaurant/bar/retail expansion with declared m² passes through to Tier-4c.
-        _has_surface = bool(re.search(r'([0-9]{2,})\s*m[2²]', t))
-        _surface_val = 0.0
-        if _has_surface:
-            _m = re.search(r'([0-9]{1,4}(?:[.,][0-9]{1,3})?)\s*m[2²]', t)
-            try: _surface_val = float(_m.group(1).replace(',','.')) if _m else 0.0
-            except: pass
+        # SMALL_ACTIVITY rejection: if the text contains a small-scale activity
+        # keyword → reject UNLESS there is an explicit major construction signal
+        # (obra mayor, new building, PEM declared, etc.).
+        # NOTE: We no longer rely on surface area in m² because BOCM documents
+        # frequently omit it. A bakery is a bakery regardless of stated m².
         for kw in SMALL_ACTIVITY:
-            if kw in t and _surface_val < 150:
-                return False, f"Small activity (surface <150m²): '{kw}'", 0
+            if kw in t and not _is_major_construction(t):
+                return False, f"Small activity (no major construction signal): '{kw}'", 0
     # Tier classification
     if any(p in t for p in ["proyecto de urbanización","junta de compensación",
                              "reparcelación","plan parcial","aprobación definitiva del plan"]):
@@ -3392,15 +3468,23 @@ def run():
             kw_list = KW_WEEKLY
             if MODE == "full": kw_list = KW_WEEKLY + KW_EXTRA_FULL
 
-            log(f"  {len(kw_list)} keywords")
-            kw_total = 0
-            for kw, sec, max_pg, tag in kw_list:
+            kw_total  = 0
+            kw_n      = len(kw_list)
+            log(f"  {kw_n} keywords  |  each chunk capped at "
+                f"{MAX_PAGES_BACKFILL if MODE == 'full' else 'per-kw'} pages")
+            for kw_idx, (kw, sec, max_pg, tag) in enumerate(kw_list, 1):
                 if not time_ok(need_s=60): break
-                log(f"  🔎 [{tag:12s}] '{kw}' [{sec}]")
+                # Time estimate: minutes remaining vs keywords remaining
+                mins_left  = (MAX_RUN_MINUTES * 60 - elapsed()) / 60
+                kws_left   = kw_n - kw_idx + 1
+                eta_note   = f"  ~{mins_left:.0f}m left, {kws_left} kws remaining"
+                # Reduce max_pages in full mode to stay within time budget
+                effective_max_pg = min(max_pg, MAX_PAGES_BACKFILL) if MODE == "full" else max_pg
+                log(f"  🔎 [{tag:12s}] '{kw}' [{sec}]  {kw_idx}/{kw_n}{eta_note}")
                 urls = search_keyword_chunked(
                     kw, date_from, date_to,
                     global_seen=global_seen,
-                    sec=sec, max_pages=max_pg,
+                    sec=sec, max_pages=effective_max_pg,
                     chunk_days=(7 if MODE in ("weekly","full") else 999))
                 added = sum(1 for u in urls if add_url(u))
                 if added > 0:
