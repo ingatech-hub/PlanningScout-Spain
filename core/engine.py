@@ -401,6 +401,10 @@ KW_WEEKLY = [
     ("campus empresarial",             SECTION_III,  5, "ACTIU+RET"),   # corporate campus
     ("zona terciaria",                 SECTION_III,  5, "ACTIU+RET"),   # tertiary zone development
     ("edificio de oficinas",           SECTION_III,  5, "ACTIU+RET"),   # office building permit
+    # ACTIU expanded: office fit-out, rehab of office space, public buildings
+    ("rehabilitación de oficinas",     SECTION_III,  5, "ACTIU+MEP"),   # office rehab = furniture + MEP
+    ("acondicionamiento de local",     SECTION_III,  4, "ACTIU+RET"),   # fit-out = furniture needed
+    ("adecuación de edificio",         SECTION_III,  4, "ACTIU+MEP"),   # building adaptation
 
     # ── MOLECOR — PVC pipe-specific infrastructure signals ───────────────────
     # Every urbanización = saneamiento + abastecimiento = PVC pipe sales.
@@ -410,6 +414,44 @@ KW_WEEKLY = [
     ("conducción de agua",             SECTION_III,  4, "INFRA+MAT"),    # water pipeline
     ("depuradora de aguas",            SECTION_III,  4, "INFRA+CON+MAT"),# WWTP = major pipe project
     ("estación de bombeo",             SECTION_III,  4, "INFRA+CON+MAT"),# pumping station
+    # Additional Molecor: every saneamiento mention with Ayuntamiento = public works
+    ("conducción forzada",             SECTION_III,  4, "INFRA+MAT"),    # pressurised main = Molecor pipes
+    ("colector de aguas residuales",   SECTION_III,  4, "INFRA+MAT"),    # sewerage collector
+    ("red de saneamiento",             SECTION_III,  5, "INFRA+CON+MAT"),# sewer network
+
+    # ── FCC CONSTRUCCIÓN — licitación + obra civil Madrid signals ─────────────
+    # FCC won €950M in Madrid in 5 years (46 contracts from Ayuntamiento de Madrid).
+    # These are the specific permit/contract types they need:
+    ("licitación de obras públicas",   SECTION_II,   6, "INFRA+CON"),   # public works tender
+    ("obras de reforma",               SECTION_III,  5, "CON+MEP"),     # refurbishment works
+    ("acondicionamiento viario",       SECTION_III,  4, "INFRA+CON"),   # road works = FCC territory
+    ("renovación de infraestructuras", SECTION_II,   4, "INFRA+CON"),   # infrastructure renewal
+
+    # ── KILOUTOU / ALQUILER MAQUINARIA — early earthwork signals ─────────────
+    # José Luis Aliaga: needs demolición + vaciado + excavación to rent early.
+    ("vaciado de solar",               SECTION_III,  5, "ALQUILER+CON"),# plot clearance = machinery
+    ("excavación en roca",             SECTION_III,  4, "ALQUILER+CON"),# rock excavation = heavy machinery
+    ("demolición de edificio",         SECTION_III,  5, "ALQUILER+CON"),# full building demolition
+    ("movimiento de tierras",          SECTION_III,  4, "ALQUILER+CON"),# earthworks = core machinery need
+
+    # ── SHARING CO / HOSPE — use-change and residential development ─────────
+    # Jaime Bello (Sharing Co): cambio de uso = holy grail. Every conversion.
+    # Operator needs to contact before obra is complete.
+    ("división horizontal",            SECTION_III,  4, "HOSPE+PRO"),   # apt subdivision = new units
+    ("segregación de vivienda",        SECTION_III,  4, "HOSPE+PRO"),   # apartment split
+    ("licencia de primera ocupación",  SECTION_III, 10, "HOSPE+MEP"),   # primera ocupación = building done
+
+    # ── PROMOTORES/RE (CBRE / Muppy / Uvesco) — land intelligence ────────────
+    # CBRE (Juan Ramón), Muppy (Daniel), Uvesco (Álvaro): all need land deals.
+    ("agrupación de compensación",     SECTION_III,  5, "PRO"),         # compensation grouping
+    ("proyecto de actuación",          SECTION_III,  5, "PRO+CON"),     # actuación project
+    ("aprovechamiento medio",          SECTION_III,  4, "PRO"),         # planning gain calculation
+
+    # ── INDUSTRIAL/LOGÍSTICA — new warehousing + logistics Madrid corridor ──
+    # Madrid's logistics belt: Valdemoro, Getafe, Coslada, Torrejón = high value
+    ("parque logístico",               SECTION_III,  5, "IND+MAT"),     # logistics park
+    ("centro de distribución",         SECTION_III,  5, "IND+MAT"),     # distribution centre
+    ("zona de actividades logísticas", SECTION_III,  4, "IND+MAT"),     # logistics activity zone
 ]
 
 KW_EXTRA_FULL = [
@@ -440,7 +482,6 @@ KW_EXTRA_FULL = [
     # ── Industrial / logistics (niche terms) ─────────────────────────────────
     ("almacén",                  SECTION_III,  8, "IND+MAT"),
     ("polígono industrial",      SECTION_III,  8, "IND+MAT"),
-    ("centro de distribución",   SECTION_III,  5, "IND+MAT"),
     ("zona logística",           SECTION_III,  5, "IND+MAT"),
     # ── Urbanismo (Section II complements for weekly Section III searches) ─────
     ("plan parcial",             SECTION_II,   8, "PRO+CON"),
@@ -458,7 +499,6 @@ KW_EXTRA_FULL = [
     ("concesión de obra",        SECTION_III,  6, "INFRA+CON"),
     ("aprobación definitiva",    SECTION_II,   8, "INFRA+CON"),
     # ── Alquiler Maquinaria (earthworks signals) ───────────────────────────────
-    ("obras de reforma",         SECTION_III,  6, "ALQUILER+MAT"),
     ("obras de adecuación",      SECTION_III,  5, "ALQUILER"),
     ("obras de ampliación",      SECTION_III,  5, "ALQUILER+MEP"),
     # ── MEP specific installations ─────────────────────────────────────────────
@@ -495,8 +535,6 @@ KW_EXTRA_FULL = [
     ("obra de infraestructura",     SECTION_II,   8, "INFRA+CON"),
     ("concesión administrativa",    SECTION_II,   5, "INFRA+PRO"),
     # ── Alquiler Maquinaria earthworks ────────────────────────────────────────
-    ("movimiento de tierras",       SECTION_III,  5, "ALQUILER+CON"),
-    ("vaciado de solar",            SECTION_III,  4, "ALQUILER+CON"),
     ("desescombro",                 SECTION_III,  4, "ALQUILER"),
     ("explanación",                 SECTION_III,  4, "ALQUILER+CON"),
     # ── Kinépolis / gran formato: full-mode extra terms ───────────────────────
@@ -1859,6 +1897,20 @@ GRANT_SIGNALS = [
     "proyecto de rehabilitación",
     "modificación de uso",
     "autorización de obras de rehabilitación",
+    # ── Additional BOCM-specific plenario / agreement phrasings ──────────────
+    "se acuerda la aprobación definitiva",  # Plenary agreement on final approval
+    "resuelve aprobar definitivamente",     # Resolution to definitively approve
+    "queda aprobado definitivamente",       # Definitive approval confirmed
+    "acuerdo plenario de aprobación",       # Plenary board approval
+    "resolución aprobatoria",              # Approving resolution
+    "se declara definitivamente aprobado",  # Declared definitively approved
+    "se aprueba el plan especial",         # Plan especial approval
+    "aprobación definitiva del plan",      # Generic definitive plan approval
+    "aprobación definitiva del estudio",   # Estudio de detalle approval
+    "se aprueba el proyecto de urbanización",  # Direct urbanisation project
+    "aprobación inicial y provisional",    # Initial + provisional in one document
+    "se autoriza la actividad",            # Activity licence granted
+    "se concede la autorización",          # Generic authorisation granted
 ]
 CONSTRUCTION_SIGNALS = [
     "obra mayor", "obras mayores", "licencia de obras",
@@ -2229,12 +2281,13 @@ def score_lead(p):
 
     # Phase bonus
     phase = (p.get("phase","") or "").lower()
-    if phase == "definitivo":      score += 8
-    elif phase == "licitacion":    score += 10
-    elif phase == "adjudicacion":  score += 15  # contract awarded = most actionable
-    elif phase == "en_obra":       score += 12  # on-site = urgent for suppliers
-    elif phase == "inicial":       score -= 5
-    elif phase == "solicitud":     score += 3   # pre-lead — lower score, different value
+    if phase == "primera_ocupacion":score += 20  # building DONE = most urgent for hospe/MEP
+    elif phase == "adjudicacion":   score += 15  # contract awarded = most actionable for materials
+    elif phase == "en_obra":        score += 12  # on-site = urgent for suppliers/machinery
+    elif phase == "licitacion":     score += 10  # active tender = urgent for constructora
+    elif phase == "definitivo":     score += 8   # final approval = 30-day window
+    elif phase == "inicial":        score -= 5   # initial = long horizon
+    elif phase == "solicitud":      score += 3   # pre-lead, lower urgency
 
     # Budget
     val = p.get("declared_value_eur")
@@ -2787,18 +2840,24 @@ def ai_extract(text, url, pub_date, pdf_text=None):
         client = OpenAI(api_key=OPENAI_API_KEY)
 
         sys_prompt = """You are an elite construction intelligence analyst for Spain.
-You read BOCM/BOE documents to extract actionable leads for construction supply companies.
+You read BOCM/BOE documents to extract actionable leads for B2B sales teams in construction.
 
-Clients: MEP Installers (elevators/HVAC/fire) | Retail Expansion | Promotores/RE
-         Gran Constructora | Industrial/Logistics | Materials Suppliers | Machinery Rental
-         Hospitality/Flexliving Operators | Office Furniture (ACTIU-type)
+Your subscribers include these specific companies — tailor analysis for them:
+• FCC Construcción: gran constructora, licitaciones públicas, obra civil Madrid. Needs 6-18mo lead time before licitación.
+• Grupo Saona / Malvón / Kinépolis: retail & restauración expansion, new centros comerciales, high-footfall zones.
+• Sharing Co / Room00 (Jaime Bello): flexliving operator. Cambio de uso = holy grail. Primera ocupación = call TODAY.
+• ACTIU (Jonatan Molina): office/contract furniture. Every new edificio de oficinas, hotel, coworking, hospital = sale.
+• Kiloutou (José Luis Aliaga): maquinaria alquiler. Needs demolición/vaciado/excavación ASAP — before obra starts.
+• Molecor (Javier González): PVC pipes, Loeches/Getafe Madrid. Every saneamiento/abastecimiento project = direct sales.
+• CBRE / Muppy / Uvesco: RE investment. Reparcelaciones, plan parcial, suelo urbanizable.
+• MEP instaladores: any obra mayor, rehabilitación integral, edificio plurifamiliar.
 
 CRITICAL RULES:
 1. Return ONLY valid JSON — no markdown, no text outside JSON.
 2. If NOT a specific construction project → {"permit_type":"none","confidence":"low"}
 3. Required fields: applicant, address, municipality, permit_type, description,
    declared_value_eur, date_granted, confidence, lead_score, expediente, phase,
-   supplies_needed, profile_fit, ai_evaluation.
+   supplies_needed, profile_fit, ai_evaluation, action_window, key_contacts, obra_timeline.
 4. permit_type (exact strings only):
    "urbanización" | "plan especial" | "plan especial / parcial" |
    "obra mayor nueva construcción" | "obra mayor industrial" | "obra mayor rehabilitación" |
@@ -2808,100 +2867,101 @@ CRITICAL RULES:
    For multi-stage projects: SUM all Etapa PEMs. Hard cap 3,000,000,000. NUMBER or null.
    ICIO base imponible = PEM exactly (Spanish tax law Art. 102 TRLRHL).
 6. applicant: The PROMOTOR / company building. For urbanización = "Junta de Compensación [NAME]".
-   For licitación = "Ayuntamiento de [MUNI]". Never blank.
+   For licitación = "Ayuntamiento de [MUNI]". Include CIF if found in text. Never blank.
 7. municipality: Specific Madrid town (e.g. "Getafe","Las Rozas"). NOT "Comunidad de Madrid".
-8. description: ONE sentence, commercially focused. Include: what is built, m² if available,
-   location specifics, budget, timeline, commercial opportunity.
-9. lead_score: 0–100 integer. Large PEM + definitivo approval = 70-85. No PEM + inicial = 25-40.
+8. description: 2 sentences MAX. Sentence 1: what is built, m² if available, nº viviendas/plantas,
+   exact address, PEM. Sentence 2: who benefits and concrete next action.
+   Example: "571 viviendas plurifamiliares + garaje, C/ Alonso Zamora 16, SSRR — PEM €82.2M.
+   Sharing Co / Room00: contactar a AEDAS Homes AHORA para gestión de activo antes de que salga al mercado."
+9. lead_score: 0–100. Large PEM + definitivo = 75-90. primera_ocupacion = 85+. licitación activa = 80+.
+   cambio de uso definitivo = 70+. No PEM + inicial = 25-40.
 10. phase: "definitivo"|"inicial"|"licitacion"|"adjudicacion"|"en_obra"|"primera_ocupacion"|"en_tramite"
 11. confidence: "high" (all fields confirmed) | "medium" | "low"
 
-AI_EVALUATION — CRITICAL FIELD (commercially actionable analysis):
-This is the most important field for our clients. DO NOT write generic text.
-Write 3-5 sentences covering:
-- WHAT is being built/approved, exact location, PEM if known
-- CONTEXT: why this location/project matters (population, corridor, demand drivers)
-- PHASE & TIMING: current stage, estimated timeline to obra/licencia
-- WHO SHOULD ACT NOW and HOW: specific call to action for each relevant profile
-  (e.g. "Instaladores MEP: contactar al promotor AHORA antes de que adjudique HVAC")
-  (e.g. "Gran Constructora: pre-calificarse para licitación en 12-18 meses")
-  (e.g. "Operadores de hospedaje/flexliving: edificio residencial nuevo en barrio X — contactar al promotor")
-- Any specific data points from the document (m², nº viviendas, plazo ejecución)
+NEW REQUIRED FIELDS:
 
-GOOD ai_evaluation example:
-"Proyecto de urbanización definitivo APE 08.21 Las Tablas Oeste, Fuencarral-El Pardo, Madrid — PEM confirmado €106.7M. Uno de los 3 mayores proyectos de urbanización de Madrid capital en 5 años: >200.000m² de nuevo suelo con viario completo, redes BT/MT, saneamiento y telecomunicaciones. Etapa 1: 24 meses; Etapa 2: 36 meses desde aprobación definitiva. Gran Constructora: pre-calificarse para licitación civil estimada en 6-18 meses — el pliego técnico saldrá antes de fin de año. Instaladores MEP: contactar a la Junta de Compensación ahora para pipeline de instalaciones BT, alumbrado y telecomunicaciones (€8-15M en MEP). Suministradores: hormigón HA-25 ~10.000m³, tubería PVC DN200-400 ~5km, zahorra Z-1 ~2.000t."
-BAD ai_evaluation (NEVER do this):
-"Proyecto de construcción en Getafe — PEM no declarado. Revisar el PDF original para detalles técnicos y cronograma. Contactar al promotor o Ayuntamiento para confirmar fase de ejecución."
+action_window — EXACTLY one of these values (choose based on urgency):
+"⚡ ACTUAR ESTA SEMANA" → licitación activa | primera ocupación | adjudicación | acta de inicio | contribuciones esp.
+"📞 CONTACTAR EN 30 DÍAS" → aprobación definitiva | cambio de uso concedido | reparcelación definitiva
+"📅 MONITORIZAR (3-6 meses)" → aprobación inicial | estudio de detalle inicial | plan parcial inicial
+"🔮 PIPELINE LARGO (>12 meses)" → plan de sectorización | DIR inicial | constitución JC | plan general
 
-SUPPLIES NEEDED — ULTRA-DETAILED EXTRACTION (CRITICAL):
-This field is commercially critical. Extract EXACT specifications from the document text.
-DO NOT use generic placeholders. READ the [TABLA_DATOS_FINANCIEROS], [TABLA_PARCELAS], 
-and full PDF text to find:
+key_contacts — extract from PDF text any: director de obra, aparejador, arquitecto técnico, promotor
+  contact, gerente del proyecto, CIF/NIF del promotor. If multiple: separate with " | ".
+  Format: "Promotor: [company/name] | Dir.Obra: [name] | Aparejador: [name] | CIF: [xxx]"
+  If none found in document: ""
 
-For URBANIZACIÓN projects, extract:
-- Electrical infrastructure: "Red eléctrica BT 20kV, 4 centros transformación 630kVA, alumbrado público LED 150W"
-- Water/sewer: "Tubería abastecimiento PVC DN200-400mm L=2.4km, colector saneamiento DN500 L=1.8km"
-- Roads: "Pavimentación asfáltica 18.500m², zahorra artificial Z-1 2.200t, bordillos hormigón 3.200ml"
+obra_timeline — extract construction timing from document:
+  "plazo de ejecución: X meses" → "Plazo: X meses desde inicio"
+  "etapa 1: X meses, etapa 2: Y meses" → "Etapa 1: X meses | Etapa 2: Y meses"
+  phase definitivo + PEM → estimate "Inicio estimado: Q[N] 202X (estimado)"
+  If no timing found: ""
 
-For NUEVA CONSTRUCCIÓN / EDIFICIOS, extract:
-- Structure: "Hormigón HA-25 850m³, acero corrugado B500S 95t, encofrado 4.200m²"
-- MEP systems: "Ascensores 6 uds (4 pers + 2 carga), HVAC VRF 180kW, PCI rociadores + BIEs"
-- Facades: "Cerramiento ladrillo cara vista 2.800m², carpintería aluminio RPT 420m²"
+AI_EVALUATION — THE MOST IMPORTANT FIELD. PERSONALIZED, SPECIFIC, ACTIONABLE:
+Write 3-6 sentences. NEVER generic. USE company names from subscriber list above.
+Structure:
+1. WHAT + WHERE + PEM: "Proyecto de urbanización definitivo [NAME], [MUNI] — PEM €X.XM."
+2. SCALE/CONTEXT: why this location matters, population/corridor, strategic importance.
+3. TIMING: phase, estimated timeline, next milestone.
+4. PERSONALIZED CALLOUTS — use exact company names:
+   FCC/Gran Constructora: "FCC Construcción: pre-calificarse para licitación civil — estimado X meses."
+   Kiloutou: "Kiloutou: excavadoras + compactadores en [mes estimado] — contactar promotor ahora."
+   Sharing Co: "Sharing Co / Room00: contactar al promotor ANTES de comercialización — flexliving opportunity."
+   Molecor: "Molecor: colector DN-X ~Xkm + red abastecimiento DN-X ~Xkm — cotizar YA."
+   Saona/Kinépolis/Malvón: "Saona/Kinépolis: zona [tipo] en [muni] — evaluar superficie disponible."
+   ACTIU: "ACTIU: [edificio/hotel] — contactar promotor en fase de proyecto básico."
+   CBRE/Muppy: "CBRE/Muppy: entrada en JC / adquisición de suelo — evaluar ahora."
+5. QUANTITIES: any m², viviendas, pipes, machinery from document.
 
-For INDUSTRIAL / NAVES, extract:
-- Structure: "Estructura metálica IPE-400 85t, panel sándwich cubierta 6.500m²"
-- Installations: "Instalación eléctrica MT 1.000kVA, iluminación industrial LED 400W"
+GOOD ai_evaluation:
+"Proyecto de urbanización definitivo APE 08.21 Las Tablas Oeste, Fuencarral-El Pardo — PEM €106.7M confirmado. Uno de los 3 mayores proyectos urbanización Madrid capital en 5 años: >200.000m² suelo nuevo, viario completo, redes BT/MT, saneamiento y telecomunicaciones. Etapa 1: 24 meses | Etapa 2: 36 meses desde hoy. FCC Construcción: pre-calificarse para licitación civil — pliego técnico estimado en 6-12 meses. Kiloutou: excavadoras 30t + compactadores para movimiento de tierras — inicio obra Q4 2026 estimado. Molecor: colector saneamiento DN400-500 ~3.5km + red abastecimiento DN200 ~2.4km — cotizar YA. CBRE/Muppy: área residencial futura — evaluar posición en JC."
 
-NEVER output: "Materiales según especificaciones del proyecto"
-ALWAYS include at least 3 specific supply categories.
-Format: "🔧 [MEP systems] | 🛒 [Materials with quantities] | 🚧 [Machinery needs]"
+BAD (NEVER):
+"Proyecto de construcción en Getafe — PEM no declarado. Revisar el PDF original."
 
-PROFILE_FIT — Which client profiles benefit from this project:
-- "infrastructura" — Gran infraestructura: urbanización >€10M, obra civil, licitaciones estado
-- "constructora" — Promotores grandes: edificios plurifamiliares, licitaciones municipales
-- "mep" — Instaladores: edificios con ascensores/HVAC, rehab integral, primera ocupación
-- "industrial" — Naves, almacenes, polígonos industriales, plataformas logísticas
-- "retail" — Locales comerciales, centros comerciales, cambios de uso a terciario
-- "alquiler" — Alquiler maquinaria: cualquier obra mayor, urbanización, demolición, movimiento tierras
-- "materiales" — Suministro materiales: urbanización, nueva construcción, rehab, industrial
-- "promotores" — Promotores/RE: reparcelación, DIR, segregación finca, plan parcial, convenio urbanístico
-- "hospe" — Hospitality/Flexliving: cambio de uso a residencial/hospedaje, rehab integral edificios, plurifamiliar nueva construcción, primera ocupación residencial, apartamentos turísticos
-- "actiu" — Mobiliario contract/oficina: edificios de oficinas, coworking, hoteles, residencias estudiantes
+SUPPLIES NEEDED — ULTRA-DETAILED WITH EXACT QUANTITIES from [TABLA_DATOS_FINANCIEROS]:
+Urbanización: "🔧 Red BT 20kV + X CT-630kVA + alumbrado LED Xm | 🛒 Hormigón HA-25 Xm³, tubería PVC DN-X Lkm, zahorra Z-1 Xt | 🚧 Excavadora 30t, compactador 12t, extendedora"
+Nueva construcción: "🔧 Ascensores X ud (X+X), HVAC VRF XkW, PCI rociadores + BIEs | 🛒 Hormigón HA-25 Xm³, acero B500S Xt, cerramiento Xm² | 🚧 Grúa torre, plataformas, retroexcavadora"
+Industrial: "🔧 Eléctrica MT XkVA, iluminación LED industrial | 🛒 Estructura metálica Xt, panel sándwich Xm², solera Xm² | 🚧 Grúas, explanación, pavimentación"
+Rehab/CdU: "🔧 HVAC completo, fontanería nueva, eléctrica BT | 🛒 Tabiquería, acabados, carpintería RPT | 🚧 Plataformas tijera, andamios, herramientas menores"
+If no quantities found: estimate intelligently using PEM ratios. NEVER generic placeholders.
 
-Examples:
-Urbanización €50M → profile_fit: ["infrastructura","constructora","alquiler","materiales"]
-Nave 5.000m² → profile_fit: ["industrial","alquiler","materiales"]
-Edificio 40 viviendas → profile_fit: ["constructora","mep","materiales","hospe"]
-Cambio de uso local→residencial → profile_fit: ["hospe","mep","retail"]
+PROFILE_FIT:
+"infrastructura" — urbanización >€10M, obra civil, licitaciones estado
+"constructora" — edificios plurifamiliares, licitaciones municipales
+"mep" — edificios con ascensores/HVAC, rehab integral, primera ocupación
+"industrial" — naves, almacenes, polígonos, logística
+"retail" — locales comerciales, centros comerciales, cambio de uso terciario
+"alquiler" — obra mayor, urbanización, demolición, movimiento tierras
+"materiales" — urbanización, nueva construcción, rehab, industrial
+"promotores" — reparcelación, DIR, segregación, plan parcial, convenio
+"hospe" — cambio de uso residencial/hospedaje, rehab edificios, plurifamiliar, primera ocupación
+"actiu" — oficinas, coworking, hoteles, hospitales, universidades, edificios terciarios
 
 DOCUMENT RULES:
-- "base imponible del ICIO" → declared_value_eur = that number exactly, confidence:"high"
-- "aprobación definitiva" + "presupuesto" → phase:"definitivo", confidence:"high"
-- "se aprueba" + "plan especial/parcial/urbanización" → phase:"definitivo"
-- "aprobación inicial" → phase:"inicial", confidence:"medium"
-- "se ha solicitado" → phase:"en_tramite" (not yet granted)
+"base imponible del ICIO" → declared_value_eur = exact number, confidence:"high"
+"aprobación definitiva" OR "se aprueba" + plan/urbanización → phase:"definitivo"
+"aprobación inicial" → phase:"inicial"
+"primera ocupación" → phase:"primera_ocupacion", action_window:"⚡ ACTUAR ESTA SEMANA"
+"adjudicación" / "acta de inicio" → phase:"adjudicacion"/"en_obra", action_window:"⚡ ACTUAR ESTA SEMANA"
+"se ha solicitado" → phase:"en_tramite"
 
-CAMBIO DE USO — All BOCM synonyms (ALL → permit_type:"cambio de uso", profile_fit MUST include "hospe"):
-"cambio de uso" | "cambio de destino" | "modificación de uso" | "cambio de actividad"
-"variación de uso" | "alteración de uso" | "implantación de nuevo uso" | "reconversión"
-"mutación de destino" | "cambio de uso de local a vivienda" | "cambio de uso de oficinas"
-"transformación a uso residencial" | "adecuación a nuevo uso"
+CAMBIO DE USO (all → permit_type:"cambio de uso", profile_fit MUST include "hospe"):
+"cambio de uso"|"cambio de destino"|"modificación de uso"|"cambio de actividad"
+"variación de uso"|"alteración de uso"|"implantación de nuevo uso"|"reconversión"
+"división horizontal"|"segregación de viviendas"
 
-REHABILITACIÓN — All BOCM synonyms (→ permit_type:"obra mayor rehabilitación", profile_fit MUST include "hospe","mep"):
-"rehabilitación integral" | "reforma integral" | "obras de rehabilitación"
-"renovación integral" | "restauración integral" | "reforma general del edificio"
-"gran rehabilitación" | "actuación de regeneración" | "regeneración urbana"
-"rehabilitación estructural" | "rehabilitación completa" | "rehabilitación de edificio"
+REHABILITACIÓN (→ permit_type:"obra mayor rehabilitación", profile_fit MUST include "hospe","mep"):
+"rehabilitación integral"|"reforma integral"|"renovación integral"|"gran rehabilitación"
+"actuación de regeneración"|"regeneración urbana"|"rehabilitación de edificio"
 
-- "primera ocupación" + residential → profile_fit MUST include "hospe"
-- "saneamiento" + quantities (km/m) → profile_fit MUST include "materiales" (Molecor opportunity)
-- "urbanización" + PEM + Getafe/Valdemoro/Madrid → profile_fit MUST include "constructora","materiales"
-- "licitación" ANY budget → profile_fit MUST include "constructora","materiales","alquiler"
+"saneamiento" + quantities → profile_fit MUST include "materiales" (Molecor)
+"licitación" ANY budget → profile_fit MUST include "constructora","materiales","alquiler"
+"primera ocupación" → profile_fit MUST include "hospe","mep"
 
-TABLA_DATOS: Extract ALL financial data from [TABLA_DATOS_FINANCIEROS].
-Use [TABLA_PARCELAS] m² to estimate material quantities.
-Extract company names from [DATOS_PROMOTORES_PROPIETARIOS] for applicant field.
-If PEM estimated (not explicit), set confidence:"medium" and note method in ai_evaluation.
+TABLA_DATOS: Extract ALL from [TABLA_DATOS_FINANCIEROS]. Use [TABLA_PARCELAS] m² for quantities.
+Extract contacts from [DATOS_PROMOTORES_PROPIETARIOS] for key_contacts field.
+If PEM estimated: confidence:"medium", explain method in ai_evaluation.
 """
 
         # Build the richest possible context for the AI:
@@ -3064,7 +3124,10 @@ HDRS = [
     "Maps Link","Description","Source URL","PDF URL",
     "Mode","Confidence","Date Found","Lead Score","Expediente","Phase",
     "Estimated PEM","AI Evaluation","Supplies Needed","Profile Fit","Fuente",
-    "Project Size",   # Col W — m², viviendas, plantas, or AI size estimate
+    "Project Size",    # Col W — m², viviendas, plantas, or AI size estimate
+    "Action Window",   # Col X — ⚡ ACTUAR ESTA SEMANA / 📞 30 DÍAS / 📅 MONITORIZAR / 🔮 PIPELINE
+    "Key Contacts",    # Col Y — Promotor | Dir.Obra | Aparejador extracted from PDF
+    "Obra Timeline",   # Col Z — plazo de ejecución, etapa structure, estimated start
 ]
 _ws             = None
 _seen_urls      = set()
@@ -3165,11 +3228,14 @@ def write_permit(p, pdf_url=""):
             p.get("expediente",""),
             p.get("phase",""),
             p.get("estimated_pem",""),
-            (p.get("ai_evaluation") or "")[:500],
-            (p.get("supplies_needed") or "")[:600],  # Increased from 300 to 600
-            profile_fit_str,  # Profile Fit column
-            fuente,           # Fuente: BOCM or BOE — for filtering in sheet
-            (p.get("project_size") or ""),  # Project Size: m², viviendas, plantas
+            (p.get("ai_evaluation") or "")[:600],
+            (p.get("supplies_needed") or "")[:600],
+            profile_fit_str,
+            fuente,
+            (p.get("project_size") or ""),
+            (p.get("action_window") or ""),     # Col X — urgency signal
+            (p.get("key_contacts") or "")[:300],# Col Y — extracted contacts
+            (p.get("obra_timeline") or ""),     # Col Z — timing info
         ]
 
         try:
@@ -3393,6 +3459,34 @@ def process_one(url, idx, total):
             p["supplies_needed"] = generate_supplies_estimate(
                 p.get("permit_type",""), p.get("declared_value_eur"), p.get("description",""),
                 full_text=pdf_text or text)
+
+        # ── action_window fallback (when AI doesn't set it) ────────────────────
+        if not p.get("action_window"):
+            phase = (p.get("phase") or "").lower()
+            pt    = (p.get("permit_type") or "").lower()
+            if phase in ("primera_ocupacion","adjudicacion","en_obra","licitacion") \
+               or "contribuciones especiales" in pt:
+                p["action_window"] = "⚡ ACTUAR ESTA SEMANA"
+            elif phase == "definitivo" or "definitiv" in (p.get("ai_evaluation") or "").lower():
+                p["action_window"] = "📞 CONTACTAR EN 30 DÍAS"
+            elif phase == "inicial":
+                p["action_window"] = "📅 MONITORIZAR (3-6 meses)"
+            else:
+                p["action_window"] = "🔮 PIPELINE LARGO (>12 meses)"
+
+        # ── obra_timeline fallback — extract from pdf_text if AI missed it ────
+        if not p.get("obra_timeline") and pdf_text:
+            import re as _re
+            _t = (pdf_text or "").lower()
+            # Try to find "plazo de ejecución: X meses"
+            _pz = _re.search(r'plazo\s+de\s+ejecuci[oó]n[^0-9]*(\d+)\s*meses', _t)
+            if _pz:
+                p["obra_timeline"] = f"Plazo: {_pz.group(1)} meses"
+            else:
+                # Try etapa structure
+                _et = _re.findall(r'etapa\s+(\d+)[^0-9]*(\d+)\s*meses', _t)
+                if _et:
+                    p["obra_timeline"] = " | ".join(f"Etapa {e[0]}: {e[1]} meses" for e in _et[:3])
 
         if write_permit(p, pdf_url or ""):
             return 1, 0, 0  # saved
