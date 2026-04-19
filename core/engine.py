@@ -493,10 +493,22 @@ LOGISTICS_MUNICIPALITIES = [
 DAY_SCAN_KWS   = [
     "licencia", "urbanización", "licitación",
     "reparcelación", "aprobación definitiva", "plan especial", "plan parcial",
-    "contribuciones especiales",  # confirmed obra documents with budget + addresses
-    "declaración responsable",    # Ley 1/2020 fast-track licences — replaces obra mayor for many projects
-    "adjudicación",               # confirmed contracts (adjudicación de obras, adjudicado a)
-    "declaración de interés regional",  # DIRs = major land development signals for Promotores/RE
+    "contribuciones especiales",  # confirmed obra with budget + address
+    "declaración responsable",    # fast-track licences replacing obra mayor
+    "adjudicación",               # confirmed contracts
+    "declaración de interés regional",  # DIRs = major land development
+    # ── CRITICAL additions: without these, daily mode NEVER finds these docs ──
+    # Daily mode (--weeks 1) relies 100% on DAY_SCAN_KWS — keyword search only
+    # runs in weekly/full mode. These were previously missing, causing:
+    # • Sharing Co / Room00: zero cambio de uso leads on daily runs
+    # • MEP installers: zero obra mayor / rehabilitación on daily runs
+    # • Retail (Saona/Malvón/Kinépolis): zero refurbishment leads daily
+    "cambio de uso",        # Sharing Co / hospe: use conversions
+    "cambio de destino",    # BOCM synonym — very common in Ayuntamiento licencias
+    "rehabilitación",       # catches rehabilitación integral, de edificio, energética
+    "obra mayor",           # individual building permits — MEP + constructora
+    "reforma integral",     # whole-building renovation
+    "nueva construcción",   # new builds — AEDAS/Vía Célere type projects
 ]
 DAY_SCAN_KWS_V = ["base imponible", "icio", "notificación", "liquidación provisional"]
 
@@ -545,33 +557,60 @@ PROFILE_TRIGGERS = {
         "aprovechamiento urbanístico", "coeficiente de edificabilidad",
         "proyecto de actuación especial",
     ],
-    # ── Compras/Materiales — any confirmed project needs materials ─────────────
+    # ── Compras/Materiales — Molecor (PVC pipes) + cement, steel, all materials ─
+    # Molecor (Javier González): manufactures PVC pipes in Loeches/Getafe Madrid.
+    # EVERY urbanización = saneamiento network = direct pipe sales opportunity.
+    # Added: saneamiento signals, colector, zahorra, quantities vocabulary.
     "compras": [
         "proyecto de urbanización", "nueva construcción", "rehabilitación integral",
         "nave industrial", "licitación de obras", "hormigón", "tubería",
         "acero", "áridos", "pavimentación", "cerramiento", "cubierta",
         "carpintería", "aislamiento", "estructura metálica", "panel sándwich",
+        # Molecor-specific: sewer/water infrastructure = direct PVC pipe sales
+        "saneamiento", "colector", "red de abastecimiento",
+        "conducción de agua", "abastecimiento de agua", "red de saneamiento",
+        "pluviales", "drenaje", "fecales",
+        # Urbanización quantities — every project has these
+        "zahorra", "pavimentación asfáltica", "bordillo", "encintado",
+        # Confirmed project signals
+        "presupuesto de ejecución material", "base imponible",
+        "unidades de obra", "mediciones", "partidas de obra",
     ],
     # ── Hospitality / Flexliving / Residencial Investment (Sharing Co / Room00) ──
+    # ALL cambio de uso synonyms that BOCM uses — previously missing 5 of them.
+    # Jaime Bello (Sharing Co): cambio de uso = holy grail.
+    # Primera ocupación = building complete, needs operator NOW.
     "hospe": [
+        # Cambio de uso — ALL BOCM phrasings (was missing 5 of these)
         "cambio de uso", "cambio de destino",
-        "uso residencial", "uso hospedaje", "uso hotelero", "uso turístico",
+        "modificación de uso",        # ← was MISSING
+        "cambio de actividad",        # ← was MISSING
+        "variación de uso",           # ← was MISSING
+        "alteración de uso",          # ← was MISSING
+        "implantación de nuevo uso",  # ← was MISSING
+        "reconversión",               # ← was MISSING
+        "actuación de regeneración",  # ← was MISSING
+        "renovación integral",        # ← was MISSING (EU Next Gen term)
+        # Rehabilitación — all phrasings
         "rehabilitación integral", "rehabilitación de edificio",
         "reforma integral", "rehabilitación de viviendas",
+        "restauración integral", "reforma general del edificio",
+        "gran rehabilitación",
+        # Use types and residential
+        "uso residencial", "uso hospedaje", "uso hotelero", "uso turístico",
         "edificio plurifamiliar", "edificio de viviendas", "nueva construcción",
         "viviendas de uso turístico", "apartamentos turísticos",
         "residencia de estudiantes", "residencia de mayores",
         "licencia de obras mayor", "obra mayor", "primera ocupación",
         "número de habitaciones", "número de viviendas",
         "licencia de apertura", "actividad de hospedaje",
-        "uso terciario", "alojamiento temporal",
+        "alojamiento temporal",
         "hostal", "hotel", "pensión", "establecimiento hotelero",
-        "reforma de edificio", "rehabilitación de edificio",
+        "reforma de edificio",
     ],
-    # ── ACTIU — office furniture: needs office fit-outs, new builds, coworking ─
-    # Every new office building, office rehabilitation, coworking space, hotel
-    # interior and educational building is a sales opportunity for ACTIU's contract
-    # furniture division. The Commercial Director Madrid needs first-mover intel.
+    # ── ACTIU — contract/office furniture: new builds, fit-outs, public buildings ─
+    # Jonatan Molina (Director Comercial Madrid): every new edificio de oficinas,
+    # coworking, hotel, hospital, university = direct furniture contract sale.
     "actiu": [
         "edificio de oficinas", "uso oficinas", "edificio terciario",
         "coworking", "espacio de trabajo", "centro de negocios",
@@ -582,6 +621,9 @@ PROFILE_TRIGGERS = {
         "licitación de obras", "contrato de obras",
         "hotel", "establecimiento hotelero", "residencia de estudiantes",
         "centro educativo", "colegio", "universidad",
+        # Public buildings with large furniture procurement
+        "hospital", "centro de salud", "biblioteca", "sede municipal",
+        "edificio administrativo", "equipamiento público",
     ],
 }
 
@@ -2212,6 +2254,49 @@ def score_lead(p):
     if any(k in desc for k in ["demolición","derribo"]) and any(k in desc for k in ["nueva construcción","nueva planta"]):
         score += 6
 
+    # ── Molecor / Compras — saneamiento projects = direct PVC pipe sales ────────
+    # Every urbanización with saneamiento is a confirmed Molecor sales opportunity.
+    # Large PEM + saneamiento = high-value lead for materials purchasing team.
+    _saneamiento_signals = ["saneamiento", "colector", "red de abastecimiento",
+                            "conducción de agua", "abastecimiento de agua",
+                            "red de saneamiento", "pluviales", "drenaje"]
+    if any(k in desc for k in _saneamiento_signals):
+        if val and val >= 2_000_000:
+            score += 8   # large saneamiento project = confirmed Molecor pipeline
+        else:
+            score += 4
+
+    # ── FCC / Gran Constructora — licitación in Madrid = highest-value signal ──
+    # FCC Construcción's primary client is Ayuntamiento de Madrid (46 contracts in 5yr).
+    # A licitación in Madrid capital or a PAU/APE = their core business.
+    _fcc_signals = ["área de planeamiento específico", "pau-", "pau ",
+                    "plan de actuación urbanística", "licitación de obra pública",
+                    "ayuntamiento de madrid", "licitación en madrid"]
+    if any(k in desc for k in _fcc_signals) and "madrid" in muni:
+        score += 8
+
+    # ── Kiloutou / Alquiler Maquinaria — demolición + excavación = immediate need ─
+    # José Luis Aliaga (Kiloutou): demolición + vaciado + excavación = call NOW.
+    # These are the earliest signals — machinery needed before obra starts.
+    _kiloutou_signals = ["demolición", "derribo", "vaciado", "excavación",
+                         "explanación", "desescombro", "movimiento de tierras",
+                         "cimentación"]
+    _kiloutou_count = sum(1 for k in _kiloutou_signals if k in desc)
+    if _kiloutou_count >= 2:
+        score += 8   # multiple earthwork signals = confirmed machinery need
+    elif _kiloutou_count == 1:
+        score += 4
+
+    # ── Saona/Kinépolis/Malvón — new urban development = future restaurant location ─
+    # Retail/restaurant expansion needs: new barrios, centros comerciales, alta afluencia.
+    # A new urbanización = new population = new restaurant location in 2-3 years.
+    _retail_location_signals = ["centro comercial", "parque comercial", "zona comercial",
+                                 "equipamiento comercial", "planta baja comercial",
+                                 "uso terciario comercial", "galería comercial",
+                                 "nueva urbanización", "nuevo barrio", "nueva área residencial"]
+    if any(k in desc for k in _retail_location_signals):
+        score += 6   # confirmed commercial/high-footfall zone = expansion target
+
     # Data completeness
     if p.get("address"):    score += 8
     if p.get("applicant"):  score += 8
@@ -2841,70 +2926,82 @@ If PEM estimated (not explicit), set confidence:"medium" and note method in ai_e
             pem  = d.get("declared_value_eur")
             muni = d.get("municipality","Madrid")
             phase = (d.get("phase") or "").lower()
+            desc_l = (d.get("description") or "").lower()
             pem_s = (f"€{pem/1_000_000:.1f}M" if pem and pem >= 1_000_000
                      else (f"€{int(pem/1000):.0f}K" if pem and pem >= 1000 else "PEM no declarado"))
             phase_s = {"definitivo":"aprobación definitiva","inicial":"aprobación inicial",
                        "licitacion":"licitación activa","adjudicacion":"contrato adjudicado",
                        "en_obra":"obra en ejecución","en_tramite":"en tramitación"}.get(phase, phase)
             applicant = d.get("applicant") or "promotor"
+            _has_san = any(k in desc_l for k in ["saneamiento","colector","abastecimiento","pluviales"])
+            _timeline = "6-12" if phase == "definitivo" else "12-24"
+
             if "urbanización" in pt or "reparcelación" in pt:
+                san_note = " Molecor/compras: proyecto con red de saneamiento — confirmar DN y longitudes para cotización PVC." if _has_san else ""
                 d["ai_evaluation"] = (
                     f"Proyecto de urbanización en {muni} — {pem_s} ({phase_s}). "
-                    f"Gran Constructora e Infraestructura: pre-calificarse para licitación civil "
-                    f"(estimado {('6-12' if phase == 'definitivo' else '12-24')} meses). "
-                    f"MEP instaladores y materiales: contactar a la Junta de Compensación ahora. "
-                    f"Promotor/JC: {applicant}.")
+                    f"FCC/Gran Constructora: pre-calificarse para licitación civil (estimado {_timeline} meses). "
+                    f"Kiloutou/alquiler: excavadoras y compactadores necesarios en fase de movimiento de tierras. "
+                    f"MEP instaladores: contactar JC ahora para pipeline BT, alumbrado y telecomunicaciones. "
+                    f"Promotor/JC: {applicant}.{san_note}")
             elif "licitación" in pt:
                 d["ai_evaluation"] = (
-                    f"Licitación activa en {muni} — {pem_s}. PLAZO ACTIVO. "
-                    f"Gran Constructora: revisar pliego técnico y presentar oferta urgente. "
-                    f"Suministradores: acordar precios con futuro adjudicatario antes de la firma. "
-                    f"Promotor/convocante: {applicant}.")
+                    f"⚡ LICITACIÓN ACTIVA en {muni} — {pem_s}. "
+                    f"FCC/Gran Constructora: revisar pliego técnico y presentar oferta URGENTE. "
+                    f"Kiloutou/alquiler: contactar al adjudicatario inmediatamente tras resolución para maquinaria. "
+                    f"Molecor/materiales: acordar precios con el futuro adjudicatario antes de firma. "
+                    f"Convocante: {applicant}.")
             elif "plan especial" in pt or "plan parcial" in pt:
                 d["ai_evaluation"] = (
-                    f"{'Aprobación definitiva' if phase == 'definitivo' else 'Aprobación inicial'} "
+                    f"{'✅ Aprobación definitiva' if phase == 'definitivo' else '📋 Aprobación inicial'} "
                     f"de plan urbanístico en {muni} — {pem_s}. "
-                    f"Promotores RE: contactar a la Junta de Compensación o propietarios del suelo. "
-                    f"Gran Constructora: monitorizar para propuesta técnica de obra civil. "
+                    f"Promotores/RE (CBRE, Muppy): contactar JC o propietarios del suelo ahora. "
+                    f"Gran Constructora (FCC): monitorizar para propuesta de obra civil en {_timeline} meses. "
+                    f"Retail (Saona, Malvón): evaluar si el uso previsto incluye equipamiento comercial. "
                     f"Promovido por: {applicant}.")
             elif "industrial" in pt or "nave" in pt:
                 d["ai_evaluation"] = (
                     f"Proyecto industrial en {muni} — {pem_s} ({phase_s}). "
                     f"MEP instaladores: eléctrica MT, PCI y climatización industrial. "
-                    f"Materiales: estructura metálica, panel sándwich, solera. "
-                    f"Alquiler maquinaria: contactar al promotor antes de inicio. Promotor: {applicant}.")
+                    f"ACTIU: evaluar si incluye oficinas de nave o coworking industrial. "
+                    f"Kiloutou/alquiler: maquinaria pesada, compactador, grúa. Promotor: {applicant}.")
+            elif "cambio de uso" in pt or any(k in desc_l for k in
+                    ["cambio de destino","modificación de uso","reconversión","variación de uso"]):
+                d["ai_evaluation"] = (
+                    f"🏠 Cambio de uso en {muni} — {pem_s} ({phase_s}). "
+                    f"Sharing Co / Room00 / hospe: contactar al propietario AHORA — "
+                    f"posicionarse como operador antes de que el edificio salga al mercado. "
+                    f"MEP instaladores: HVAC, fontanería y eléctrica — ventana de instalaciones activa. "
+                    f"ACTIU: evaluar si el nuevo uso incluye zonas comunes o coworking. "
+                    f"Solicitante: {applicant}.")
             elif "nueva construcción" in pt or "rehabilitación" in pt:
-                desc_l = (d.get("description") or "").lower()
                 _is_res = any(k in desc_l for k in ["vivienda","plurifamiliar","residencial","apartamento"])
                 if _is_res:
                     d["ai_evaluation"] = (
                         f"🏠 Edificación residencial en {muni} — {pem_s} ({phase_s}). "
-                        f"Operadores hospe/flexliving: contactar al promotor antes de que salga al mercado. "
-                        f"MEP instaladores: ascensores, HVAC y PCI — adjudicación en fase de estructura. "
+                        f"Sharing Co / Room00: contactar al promotor antes de que salga al mercado para gestión. "
+                        f"MEP instaladores: ascensores, HVAC y PCI se adjudican en fase de estructura — "
+                        f"contactar AHORA. Kiloutou: grúa torre y maquinaria de cimentación. "
                         f"Promotor: {applicant}.")
                 else:
                     d["ai_evaluation"] = (
                         f"Obra mayor en {muni} — {pem_s} ({phase_s}). "
-                        f"MEP instaladores: contactar antes de que el constructor cierre contratos. "
-                        f"Ascensores, HVAC y PCI se adjudican 3-6 meses antes de estructura. "
+                        f"MEP instaladores: contactar antes de que el constructor cierre subcontratos. "
+                        f"ACTIU: evaluar si incluye oficinas, zonas comunes o uso terciario. "
+                        f"Kiloutou/alquiler: grúa torre, plataformas elevadoras. "
                         f"Promotor: {applicant}.")
-            elif "cambio de uso" in pt:
-                d["ai_evaluation"] = (
-                    f"🏠 Cambio de uso en {muni} — {pem_s} ({phase_s}). "
-                    f"Hospe/flexliving: contactar al propietario AHORA para posicionarse como operador. "
-                    f"MEP instaladores: HVAC, fontanería y eléctrica — ventana activa. "
-                    f"Solicitante: {applicant}.")
             else:
                 d["ai_evaluation"] = (
-                    f"Proyecto en {muni} — {pem_s} ({phase_s}). "
-                    f"Promovido por: {applicant}. "
+                    f"Proyecto en {muni} — {pem_s} ({phase_s}). Promovido por: {applicant}. "
                     f"Revisar PDF adjunto para m², cronograma y especificaciones técnicas. "
-                    f"Contactar directamente al promotor para confirmar fase de instalaciones.")
+                    f"FCC/Constructora: evaluar si es licitación pública. "
+                    f"MEP/Kiloutou: confirmar fecha de inicio de obras para ventana de equipos.")
 
-        # Supplies needed: generate if missing
+        # Supplies needed: generate if missing — pass pdf_text for accurate quantities
         if not d.get("supplies_needed") or len(str(d.get("supplies_needed","")).strip()) < 10:
             d["supplies_needed"] = generate_supplies_estimate(
-                d.get("permit_type",""), d.get("declared_value_eur"), d.get("description",""))
+                d.get("permit_type",""), d.get("declared_value_eur"), d.get("description",""),
+                full_text=pdf_text or text)
 
         return d
 
@@ -3167,96 +3264,92 @@ def process_one(url, idx, total):
             pem  = p.get("declared_value_eur")
             phase = (p.get("phase") or "").lower()
             desc = (p.get("description") or "").lower()
+            applicant = p.get("applicant") or "promotor"
             pem_s = (f"€{pem/1_000_000:.1f}M" if pem and pem >= 1_000_000
                      else (f"€{int(pem/1000):.0f}K" if pem and pem >= 1000 else "PEM no declarado"))
             phase_s = {"definitivo":"aprobación definitiva","inicial":"aprobación inicial",
                        "licitacion":"licitación activa","adjudicacion":"contrato adjudicado",
                        "en_obra":"obra en ejecución","en_tramite":"en tramitación"}.get(phase, phase)
             _tier = p.get("_tier", 5)
-            
+            _has_san = any(k in desc for k in ["saneamiento","colector","abastecimiento","pluviales"])
+            _timeline = "6-12" if phase == "definitivo" else "12-24"
+
             if _tier == 6:
                 addr = p.get("address") or ""
                 p["ai_evaluation"] = (
                     f"⚡ PRE-LEAD en {muni}{(' · ' + addr[:60]) if addr else ''}. "
-                    f"Solicitud de licencia de actividad/cambio de uso en tramitación — no concedida aún. "
-                    f"Ventana de oportunidad: contactar al propietario o solicitante AHORA antes de que "
-                    f"aparezca en portales o la competencia lo detecte. "
-                    f"Expansión retail y hospe: evaluar si la ubicación encaja con criterios de apertura.")
+                    f"Solicitud en tramitación — no concedida aún. "
+                    f"Ventana de oportunidad: contactar al solicitante AHORA antes de la competencia. "
+                    f"Saona/Malvón/retail: evaluar si la ubicación encaja con criterios de expansión. "
+                    f"Sharing Co/hospe: evaluar cambio de uso potencial.")
             elif "urbanización" in pt or "reparcelación" in pt:
+                san_note = " Molecor/compras: confirmar DN y longitudes de colectores para cotización PVC." if _has_san else ""
                 p["ai_evaluation"] = (
                     f"Proyecto de urbanización en {muni} — {pem_s} ({phase_s}). "
-                    f"Alcance típico: viario, redes saneamiento/abastecimiento, electricidad BT/MT, "
-                    f"alumbrado público y zonas verdes. "
-                    f"Gran Constructora e Infraestructura: pre-calificarse para licitación civil "
-                    f"(estimado {('6-12' if phase == 'definitivo' else '12-24')} meses). "
-                    f"MEP instaladores: contactar a la Junta de Compensación ahora para pipeline "
-                    f"de instalaciones BT, alumbrado y telecomunicaciones. "
-                    f"Materiales: hormigón, tuberías PVC, zahorra y pavimentación. "
-                    f"Alquiler maquinaria: excavadoras y compactadores para movimiento de tierras.")
+                    f"Alcance: viario, saneamiento, abastecimiento, electricidad BT/MT y alumbrado público. "
+                    f"FCC/Gran Constructora: pre-calificarse para licitación civil ({_timeline} meses). "
+                    f"Kiloutou: excavadoras, compactadores y dúmpers — contactar promotor antes de inicio. "
+                    f"MEP instaladores y materiales: contactar a la JC ahora para pipeline."
+                    + san_note)
             elif "licitación" in pt:
                 p["ai_evaluation"] = (
-                    f"Licitación activa en {muni} — {pem_s}. "
-                    f"PLAZO ACTIVO: presentar oferta técnica y económica URGENTE. "
-                    f"Gran Constructora: revisar pliego técnico y calcular oferta. "
-                    f"Suministradores: acordar precios con el futuro adjudicatario antes de la firma. "
-                    f"Alquiler maquinaria: contactar al adjudicatario inmediatamente tras resolución.")
+                    f"⚡ LICITACIÓN ACTIVA en {muni} — {pem_s}. "
+                    f"FCC/Gran Constructora: revisar pliego y presentar oferta URGENTE. "
+                    f"Kiloutou: contactar al adjudicatario inmediatamente tras resolución para maquinaria. "
+                    f"Molecor/materiales: acordar precios con futuro adjudicatario antes de firma. "
+                    f"Convocante: {applicant}.")
             elif "plan especial" in pt or "plan parcial" in pt:
                 p["ai_evaluation"] = (
-                    f"{'Aprobación definitiva' if phase == 'definitivo' else 'Aprobación inicial'} "
-                    f"de {'plan especial' if 'especial' in pt else 'plan parcial'} en {muni} — {pem_s}. "
-                    f"Este instrumento urbanístico habilita {'inmediatamente' if phase == 'definitivo' else 'en 12-24 meses'} "
-                    f"el desarrollo de nueva edificación o urbanización en la zona. "
-                    f"Promotores RE: contactar a la Junta de Compensación o propietarios del suelo ahora. "
-                    f"Gran Constructora: monitorizar para propuesta técnica de obra civil. "
-                    f"ACTIU/hospe: evaluar si el uso previsto incluye oficinas o residencial.")
+                    f"{'✅ Aprobación definitiva' if phase == 'definitivo' else '📋 Aprobación inicial'} "
+                    f"de plan urbanístico en {muni} — {pem_s}. "
+                    f"{'Habilita desarrollo inmediato.' if phase == 'definitivo' else 'Desarrollo estimado en 12-24 meses.'} "
+                    f"CBRE/Muppy/Promotores RE: contactar JC o propietarios del suelo ahora. "
+                    f"Saona/Kinépolis: evaluar si el plan incluye equipamiento comercial o terciario. "
+                    f"FCC/Constructora: monitorizar para propuesta de obra civil. Promovido por: {applicant}.")
             elif "industrial" in pt or "nave" in pt:
                 p["ai_evaluation"] = (
                     f"Proyecto industrial en {muni} — {pem_s} ({phase_s}). "
-                    f"Oportunidad directa para instaladores eléctricos MT/BT, PCI y climatización industrial. "
-                    f"Materiales: estructura metálica, panel sándwich, solera industrial. "
-                    f"Alquiler maquinaria: contactar al promotor antes de inicio de obras "
-                    f"(excavadora, compactador, grúa). "
-                    f"Logística: zona industrial Madrid — evaluar si promotor necesita gestor de obra.")
-            elif "cambio de uso" in pt:
+                    f"MEP instaladores: eléctrica MT, PCI rociadores y climatización industrial. "
+                    f"ACTIU: evaluar si incluye oficinas de nave o espacios de trabajo. "
+                    f"Kiloutou/alquiler: maquinaria de cimentación, grúa, plataformas elevadoras. "
+                    f"Promotor: {applicant}.")
+            elif any(k in pt for k in ["cambio de uso","cambio de destino"]) or \
+                 any(k in desc for k in ["cambio de uso","cambio de destino","modificación de uso",
+                                          "reconversión","variación de uso"]):
                 p["ai_evaluation"] = (
                     f"🏠 Cambio de uso en {muni} — {pem_s} ({phase_s}). "
-                    f"El local u oficina está siendo reconvertido. "
-                    f"Sharing Co / Room00 / hospe: contactar al propietario AHORA para posicionarse "
-                    f"como operador o arrendatario antes de que la reforma termine. "
-                    f"MEP instaladores: ventana de instalaciones activa (HVAC, fontanería, eléctrica). "
-                    f"ACTIU: evaluar si el destino final es residencial con zonas comunes o coworking.")
+                    f"Sharing Co / Room00: contactar al propietario AHORA — posicionarse como operador "
+                    f"antes de que el edificio salga al mercado. "
+                    f"MEP instaladores: HVAC, fontanería y eléctrica — ventana de instalaciones activa. "
+                    f"ACTIU: evaluar si el nuevo uso incluye zonas comunes, coworking u oficinas. "
+                    f"Solicitante: {applicant}.")
             elif "nueva construcción" in pt or "rehabilitación" in pt:
-                _is_res = any(k in desc for k in ["vivienda","plurifamiliar","residencial",
-                                                   "hospedaje","apartamento","habitación"])
+                _is_res = any(k in desc for k in ["vivienda","plurifamiliar","residencial","apartamento","habitación"])
                 if _is_res:
                     p["ai_evaluation"] = (
-                        f"🏠 Edificación residencial/hospitality en {muni} — {pem_s} ({phase_s}). "
-                        f"Sharing Co / Room00 / operadores flexliving: contactar al promotor ANTES "
-                        f"de que el edificio salga al mercado para posicionarse como gestores. "
-                        f"MEP instaladores: ascensores, HVAC y PCI se adjudican en fase de estructura — "
-                        f"contactar al constructor ahora. "
-                        f"Materiales: hormigón HA-25, carpintería, instalaciones completas.")
+                        f"🏠 Edificación residencial en {muni} — {pem_s} ({phase_s}). "
+                        f"Sharing Co / Room00: contactar al promotor ANTES de que salga al mercado. "
+                        f"MEP instaladores: ascensores, HVAC y PCI — adjudicación en fase de estructura. "
+                        f"ACTIU: evaluar zonas comunes, recepción y lobby. "
+                        f"Kiloutou: grúa torre y maquinaria de cimentación. Promotor: {applicant}.")
                 else:
                     p["ai_evaluation"] = (
                         f"Obra mayor en {muni} — {pem_s} ({phase_s}). "
-                        f"MEP instaladores: contactar al promotor antes de que el constructor "
-                        f"cierre contratos de instalaciones. "
-                        f"Ascensores, HVAC y PCI se adjudican típicamente 3-6 meses antes de estructura. "
-                        f"Materiales: revisar PDF para mediciones exactas de hormigón y carpintería. "
-                        f"Alquiler maquinaria: grúa torre y maquinaria de cimentación.")
+                        f"MEP instaladores: contactar antes de que el constructor cierre subcontratos. "
+                        f"Ascensores, HVAC y PCI se adjudican 3-6 meses antes de estructura. "
+                        f"ACTIU: evaluar si incluye oficinas, terciario o zonas comunes. "
+                        f"Kiloutou/alquiler: grúa torre, plataformas. Promotor: {applicant}.")
             else:
-                # Generic but still better than before — includes context
-                applicant = p.get("applicant") or "promotor"
                 p["ai_evaluation"] = (
-                    f"Proyecto en {muni} — {pem_s} ({phase_s}). "
-                    f"Promotor: {applicant}. "
-                    f"Revisar PDF adjunto para detalles técnicos, m² y cronograma de ejecución. "
-                    f"Contactar directamente al promotor para confirmar fase de instalaciones. "
-                    f"Perfiles aplicables: ver columna Profile Fit para acción específica.")
+                    f"Proyecto en {muni} — {pem_s} ({phase_s}). Promotor: {applicant}. "
+                    f"Revisar PDF adjunto para m², cronograma y especificaciones. "
+                    f"FCC/Constructora: evaluar si es licitación pública o subcontratación. "
+                    f"MEP/Kiloutou: confirmar fecha inicio obras para ventana de equipos e instalaciones.")
 
         if not p.get("supplies_needed") or len(str(p.get("supplies_needed","")).strip()) < 10:
             p["supplies_needed"] = generate_supplies_estimate(
-                p.get("permit_type",""), p.get("declared_value_eur"), p.get("description",""))
+                p.get("permit_type",""), p.get("declared_value_eur"), p.get("description",""),
+                full_text=pdf_text or text)
 
         if write_permit(p, pdf_url or ""):
             return 1, 0, 0  # saved
@@ -4239,7 +4332,8 @@ def process_boe_item(boe_id, title, department, idx, total):
         # Ensure supplies needed exists
         if not p.get("supplies_needed") or len(str(p.get("supplies_needed", "")).strip()) < 10:
             p["supplies_needed"] = generate_supplies_estimate(
-                p.get("permit_type", ""), p.get("declared_value_eur"), p.get("description", ""))
+                p.get("permit_type", ""), p.get("declared_value_eur"), p.get("description", ""),
+                full_text=pdf_text or text or "")
         
         # Write to sheet
         if write_permit(p, pdf_url):
