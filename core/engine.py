@@ -70,7 +70,27 @@ CLIENT_EMAIL_VAR = os.environ.get("EMAIL_SECRET_NAME", "GMAIL_TO_DEMO_MADRID")
 # declared AND below this threshold. Rows with NO declared PEM (the
 # vast majority of plan especial/urbanización docs) are ALWAYS saved.
 # Set to 0 to disable filtering entirely.
-MIN_VALUE_EUR    = int(os.environ.get("MIN_VALUE_EUR", "0"))
+MIN_VALUE_EUR        = int(os.environ.get("MIN_VALUE_EUR", "0"))
+
+# ── datos.madrid.es Cloudflare Worker proxy ──────────────────────────────
+# datos.madrid.es blocks all cloud/datacenter IPs (GitHub Actions = 403).
+# Solution: deploy a free Cloudflare Worker that relays API calls.
+# The Worker runs on Cloudflare edge IPs which datos.madrid.es does NOT block.
+#
+# HOW TO SET UP (5 minutes, free):
+#   1. Go to https://workers.cloudflare.com/ → Create Worker
+#   2. Paste this JS and deploy:
+#      export default { async fetch(req) {
+#        const t = new URL(req.url).searchParams.get("url");
+#        if (!t?.startsWith("https://datos.madrid.es/")) return new Response("",{status:403});
+#        const r = await fetch(t,{headers:{"User-Agent":"Mozilla/5.0","Accept":"application/json","Accept-Language":"es-ES"}});
+#        return new Response(await r.text(),{headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"}});
+#      }}
+#   3. Note your worker URL (e.g. https://planningscout.myname.workers.dev)
+#   4. Add GitHub secret: DATOS_MADRID_PROXY = https://planningscout.myname.workers.dev
+#
+# Without this set → engine tries direct (will be blocked from GitHub Actions)
+DATOS_MADRID_PROXY   = os.environ.get("DATOS_MADRID_PROXY", "").rstrip("/")
 
 # ── Keywords to hard-exclude from results ────────────────────────
 # These override the classifier — any document containing these exact
@@ -3806,8 +3826,13 @@ def send_digest():
             s.login(gf,gp)
             s.sendmail(gf,[t.strip() for t in gt.split(",")],msg.as_string())
         log(f"✅ Digest sent to {gt}")
+    except smtplib.SMTPAuthenticationError:
+        log("❌ Digest: Gmail authentication failed.")
+        log("   GMAIL_APP_PASSWORD must be a 16-char App Password, NOT your Gmail password.")
+        log("   To fix: myaccount.google.com → Security → 2-Step Verification → App passwords")
+        log("   Create app password for 'Mail' → copy 16 chars → update GitHub secret GMAIL_APP_PASSWORD")
     except Exception as e:
-        log(f"❌ Digest error: {e}"); import traceback; traceback.print_exc()
+        log(f"❌ Digest error: {e}")
 
 # ════════════════════════════════════════════════════════════
 # MAIN
@@ -3961,7 +3986,7 @@ def run():
     date_from = today - timedelta(weeks=WEEKS_BACK)
 
     log("=" * 70)
-    log(f"🏗️  PlanningScout Madrid — Engine v12 (Source7:datos.madrid+keywords_exclude+materiales)")
+    log(f"🏗️  PlanningScout Madrid — Engine v13 (CM-fix+datos-proxy+smtp-fix+fuente-labels)")
     log(f"📅  {today.strftime('%Y-%m-%d %H:%M')}  |  Mode: {MODE.upper()}")
     log(f"📆  {date_from.strftime('%d/%m/%Y')} → {date_to.strftime('%d/%m/%Y')} ({WEEKS_BACK}w)")
     log(f"⚙️  {N_WORKERS} processing workers  |  ⏱️ Budget: {MAX_RUN_MINUTES}min")
@@ -4092,7 +4117,7 @@ def run():
             sec5_total = 0
             for day in sec5_days:
                 if not time_ok(need_s=60):
-                    log(f"  ⏱️  Budget reached at {day.strftime('%d/%m')} — Section V scan stopped")
+                    log(f"  ⏱️  Budget reached at {day.strftime('%d/%m')} — Section V stopped")
                     break
                 day_urls = scrape_day_section(day, sec=SECTION_V, global_seen=global_seen)
                 added    = sum(1 for u in day_urls if add_url(u))
@@ -4204,7 +4229,11 @@ def run():
                             log(f"  ❌ datos.madrid future: {ex}"); dm_errors += 1
                 log(f"  datos.madrid: ✅{dm_saved} saved | ⏭️{dm_skipped} skipped | ❌{dm_errors} errors")
             else:
-                log(f"  datos.madrid: no new licencias in date range (API may be throttling — check on next run)")
+                log(f"  datos.madrid: 0 licencias — ")
+                if not DATOS_MADRID_PROXY:
+                    log(f"     WAF/IP block. Set DATOS_MADRID_PROXY secret (see engine source for setup).")
+                else:
+                    log(f"     No new licencias in date range via proxy (normal if no new grants).")
 
         # ── Remove already-seen from the collected BOCM queue ──────────────────
         all_urls = [u for u in all_urls
@@ -4726,19 +4755,15 @@ def process_cm_contrato(url, title, summary, idx, total):
         combined = (title + " " + summary).lower()
 
         # CM Contratos are PRE-VERIFIED government tenders from the official
-        # Comunidad de Madrid procurement portal — they already passed the
-        # construction keyword filter in search_cm_contratos().
-        # We do NOT call classify_permit() here: CM contract text uses language
-        # like "obras de mantenimiento", "reparación de pavimento", "conservación"
-        # that lacks BOCM grant phrases ("se aprueba", "se concede") and gets
-        # falsely rejected. These ARE genuine contracts for Kiloutou + Molecor.
-        # Only strip out obvious admin noise that slipped through the topic filter.
+        # Comunidad de Madrid procurement portal — already passed construction
+        # keyword filter in search_cm_contratos(). Do NOT call classify_permit()
+        # because CM contract text ("mantenimiento", "conservación", "reparación")
+        # lacks BOCM grant phrases and gets falsely rejected. Only strip admin noise.
         _CM_NOISE = [
             "suministro de alimentos", "limpieza de oficinas",
             "servicio de vigilancia", "seguro de ", "seguros de ",
             "transporte escolar", "catering", "arrendamiento de vehículos",
             "servicios informáticos", "consultoría de gestión",
-            "suministro de material de oficina",
         ]
         if any(n in combined for n in _CM_NOISE):
             return 0, 1, 0
@@ -4886,143 +4911,111 @@ def search_datos_madrid(date_from, date_to, global_seen):
         ("oficinas",                 "actiu+mep"),
     ]
 
-    # ── Session warmup ──────────────────────────────────────────────────────
-    # datos.madrid.es is behind a CDN/WAF that blocks cloud datacenter IPs.
-    # From sandbox/AWS: instant HTTP 403. From GitHub Actions: TCP accepted
-    # but HTTP response hangs (tarpit). Neither is fixed by User-Agent headers
-    # (Gemini's suggestion is wrong — the block is at IP layer, not UA inspection).
+    # ── Fixed PEM parser ─────────────────────────────────────────────────────
+    def _parse_pem_es(raw):
+        """Parse Spanish-formatted PEM value: '150.000,00' → 150000.0"""
+        s = str(raw or "").strip()
+        if not s or s in ("None", "nan", ""): return 0.0
+        try:
+            if "," in s and "." in s:   return float(s.replace(".", "").replace(",", "."))
+            if "," in s:                return float(s.replace(",", "."))
+            return float(s)
+        except Exception:               return 0.0
+
+    # ── Proxy-aware request builder ──────────────────────────────────────────
+    # datos.madrid.es blocks ALL cloud/datacenter IPs (GitHub Actions = 403).
+    # If DATOS_MADRID_PROXY is set → route through Cloudflare Worker proxy.
+    # If not set → try direct (will block from GitHub Actions — logs clearly).
     #
-    # Best-effort strategy:
-    # 1. Warm session: visit homepage first to acquire CDN cookies
-    # 2. Three endpoint strategies per keyword (CKAN, SQL, fallback)  
-    # 3. Short timeout (8s) — fail fast, don't waste budget on blocked IPs
-    # 4. Single retry attempt per keyword — WAF blocks don't unblock on retry
-    # 5. Abort entire source after first confirmed block (403/timeout pattern)
-    # 6. Log clearly as WAF/IP block, not "no data"
-    #
-    # If datos.madrid.es DOES start responding from GitHub Actions (their CDN
-    # config changes, or if you set up a residential proxy), this will work
-    # automatically — the session warmup + proper browser fingerprint ensures
-    # maximum compatibility when the server does respond.
+    # To enable: deploy the CF Worker described in the DATOS_MADRID_PROXY
+    # constant near the top of this file, then set the GitHub secret.
     from dateutil import parser as _dp
 
-    # Build a dedicated browser-fingerprinted session for datos.madrid.es
-    _dm_session = requests.Session()
-    _dm_session.verify = False
-    _dm_ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-               "AppleWebKit/537.36 (KHTML, like Gecko) "
-               "Chrome/124.0.0.0 Safari/537.36")
-    _dm_session.headers.update({
-        "User-Agent":      _dm_ua,
-        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection":      "keep-alive",
-        "DNT":             "1",
-        "Upgrade-Insecure-Requests": "1",
-    })
-
-    # Step 1: Warm the session — visit homepage to pick up CDN cookies
-    _dm_blocked = False
-    try:
-        _warm = _dm_session.get("https://datos.madrid.es/portal/site/egob/",
-                                timeout=8, allow_redirects=True)
-        if _warm.status_code == 403:
-            _dm_blocked = True
-            log(f"  ❌ datos.madrid: WAF/IP block confirmed (HTTP 403 on homepage) — "
-                f"GitHub Actions IPs are blocked by datos.madrid.es CDN. "
-                f"This source requires a residential/Spanish IP to work. "
-                f"Skipping to avoid wasting budget.")
+    def _dm_get(api_url):
+        """
+        Make one datos.madrid.es API request.
+        Returns requests.Response or None.
+        Uses DATOS_MADRID_PROXY if set, else tries direct.
+        """
+        if DATOS_MADRID_PROXY:
+            # Route through Cloudflare Worker proxy
+            proxy_url = f"{DATOS_MADRID_PROXY}?url={quote(api_url, safe='')}"
+            try:
+                r = requests.get(
+                    proxy_url, timeout=20, verify=False,
+                    headers={
+                        "User-Agent": "PlanningScout/1.0",
+                        "Accept": "application/json",
+                    })
+                return r if r.status_code == 200 else None
+            except Exception:
+                return None
         else:
-            # Step 2: Visit dataset page to set referer and depth cookies
-            time.sleep(0.5)
-            _dm_session.headers["Referer"] = "https://datos.madrid.es/portal/site/egob/"
-            _dm_session.get(
-                f"https://datos.madrid.es/dataset/300193-0-licencias-urbanisticas",
-                timeout=8, allow_redirects=True)
-            time.sleep(0.5)
-            # Switch to JSON Accept for API calls
-            _dm_session.headers.update({
-                "Accept":  "application/json, text/plain, */*",
-                "Referer": "https://datos.madrid.es/dataset/300193-0-licencias-urbanisticas",
-                "X-Requested-With": "XMLHttpRequest",
+            # Direct access — will be blocked from GitHub Actions IPs
+            # but works if run locally with a Spanish IP or residential proxy
+            dm_sess = requests.Session()
+            dm_sess.verify = False
+            dm_sess.headers.update({
+                "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                   "Chrome/124.0.0.0 Safari/537.36",
+                "Accept":          "application/json, text/plain, */*",
+                "Accept-Language": "es-ES,es;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Referer":         "https://datos.madrid.es/dataset/300193-0-licencias-urbanisticas",
+                "DNT":             "1",
             })
-    except requests.exceptions.Timeout:
-        # Timeout on homepage = tarpit behavior for this IP
-        _dm_blocked = True
-        log(f"  ❌ datos.madrid: IP/WAF tarpit detected (homepage timeout) — "
-            f"datos.madrid.es hangs connections from cloud/datacenter IPs. "
-            f"Gemini's User-Agent fix does NOT solve this — the block is at CDN "
-            f"IP level, not header inspection. Source skipped.")
-    except Exception as _e:
-        log(f"  ⚠️ datos.madrid: session warmup error: {_e}")
-        _dm_blocked = True
+            try:
+                r = dm_sess.get(api_url, timeout=12, allow_redirects=True)
+                return r if r.status_code == 200 else None
+            except Exception:
+                return None
 
-    if _dm_blocked:
-        log(f"  🏛️ datos.madrid.es: 0 licencias (WAF/IP blocked)")
-        return []
+    # ── Check proxy / direct availability ────────────────────────────────────
+    if not DATOS_MADRID_PROXY:
+        # Probe with a quick test to detect WAF block early
+        _probe = _dm_get(f"{DATOS_API}?resource_id={RESOURCE_ID}&limit=1")
+        if _probe is None:
+            log(f"  ❌ datos.madrid: BLOCKED — datos.madrid.es WAF rejects cloud IPs.")
+            log(f"     Deploy a Cloudflare Worker proxy and set DATOS_MADRID_PROXY secret")
+            log(f"     (see setup instructions in engine source near DATOS_MADRID_PROXY)")
+            log(f"  🏛️ datos.madrid.es: 0 licencias (WAF/IP blocked — proxy not configured)")
+            return []
+    else:
+        log(f"  🔀 datos.madrid: using proxy at {DATOS_MADRID_PROXY[:50]}")
 
-    # ── Query loop ───────────────────────────────────────────────────────────
+    # ── Query loop ────────────────────────────────────────────────────────────
     results  = []
     seen_exp = set()
-    _dm_fail = 0   # consecutive API failures — abort after 3
-
-    def _parse_pem_es(raw):
-        """Parse Spanish-formatted PEM: '150.000,00' → 150000.0"""
-        s = str(raw or "").strip()
-        if not s or s in ("None", "nan", ""):
-            return 0.0
-        try:
-            if "," in s and "." in s:          # 150.000,00 format
-                return float(s.replace(".", "").replace(",", "."))
-            if "," in s:                        # 150000,00 format
-                return float(s.replace(",", "."))
-            return float(s)                     # 150000.00 or 150000
-        except Exception:
-            return 0.0
-
-    def _fetch_dm_kw(kw):
-        """Fetch one keyword. Returns list of records or None on failure."""
-        api_url = (f"{DATOS_API}?resource_id={quote(RESOURCE_ID)}"
-                   f"&q={quote(kw)}&limit=100&offset=0")
-        sql_url = (f"https://datos.madrid.es/api/3/action/datastore_search_sql"
-                   f"?sql=SELECT+*+FROM+%22{RESOURCE_ID}%22"
-                   f"+WHERE+%22OBJETO%22+ILIKE+%27%25{quote(kw)}%25%27+LIMIT+100")
-
-        for endpoint in [api_url, sql_url]:
-            try:
-                r = _dm_session.get(endpoint, timeout=45, allow_redirects=True)
-                if r.status_code == 200:
-                    try:
-                        data = r.json()
-                        recs = (data.get("result", {}).get("records")
-                                or data.get("records", []))
-                        return recs if isinstance(recs, list) else []
-                    except Exception:
-                        continue
-                if r.status_code == 403:
-                    return None   # confirmed block
-            except requests.exceptions.Timeout:
-                continue          # try next endpoint
-            except Exception:
-                continue
-        return None   # all endpoints failed
+    _dm_fail = 0   # consecutive failures — abort after 3
 
     for kw, _profile_hint in DATOS_KEYWORDS:
         if not time_ok(need_s=30): break
         if _dm_fail >= 3:
-            log(f"  ❌ datos.madrid: 3 consecutive failures — aborting remaining keywords")
+            log(f"  ❌ datos.madrid: 3 consecutive failures — aborting")
             break
 
-        records = _fetch_dm_kw(kw)
+        api_url = (f"{DATOS_API}?resource_id={quote(RESOURCE_ID)}"
+                   f"&q={quote(kw)}&limit=100&offset=0")
+        r = _dm_get(api_url)
 
-        if records is None:
+        if r is None:
             _dm_fail += 1
-            log(f"  ⚠️ datos.madrid [{kw}]: blocked/timeout ({_dm_fail}/3)")
+            log(f"  ⚠️ datos.madrid [{kw}]: failed ({_dm_fail}/3)")
             time.sleep(1.0)
             continue
 
-        _dm_fail = 0   # reset on success
+        _dm_fail = 0  # reset on success
+
+        try:
+            data = r.json()
+        except Exception:
+            continue
+
+        if not data.get("success"):
+            continue
+
+        records = data.get("result", {}).get("records", [])
 
         for rec in records:
             exp = str(rec.get("EXPEDIENTE", "")).strip()
@@ -5044,17 +5037,17 @@ def search_datos_madrid(date_from, date_to, global_seen):
             if resultado in ("inadmitida", "desistida", "caducada", "denegada"):
                 continue
 
-            obj       = str(rec.get("OBJETO", "") or "").lower()
-            desc_l    = str(rec.get("DESCRIPCION", "") or "").lower()
-            combined  = obj + " " + desc_l
+            obj      = str(rec.get("OBJETO", "") or "").lower()
+            desc_l   = str(rec.get("DESCRIPCION", "") or "").lower()
+            combined = obj + " " + desc_l
 
             if any(exc in combined for exc in KEYWORDS_EXCLUDE):
                 continue
 
-            # Fixed PEM parsing (Bug C: old double-replace destroyed decimals)
+            # Fixed PEM parsing (old double-replace destroyed decimal places)
             pem_val = _parse_pem_es(rec.get("PEM"))
             if 0 < pem_val < 30_000:
-                continue   # skip micro-scale works (<€30K)
+                continue   # skip micro-scale works
 
             seen_exp.add(exp)
             source_url = (f"https://sede.madrid.es/portal/site/tramites/"
@@ -5062,7 +5055,7 @@ def search_datos_madrid(date_from, date_to, global_seen):
                           f"?expediente={exp}")
             results.append((exp, rec, source_url, _profile_hint))
 
-        time.sleep(0.8)
+        time.sleep(0.5)
 
     log(f"  🏛️ datos.madrid.es: {len(results)} licencias found")
     return results
