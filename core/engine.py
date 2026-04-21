@@ -92,6 +92,11 @@ MIN_VALUE_EUR        = int(os.environ.get("MIN_VALUE_EUR", "0"))
 # Without this set → engine tries direct (will be blocked from GitHub Actions)
 DATOS_MADRID_PROXY   = os.environ.get("DATOS_MADRID_PROXY", "").rstrip("/")
 
+# Apollo.io contact enrichment — finds CEO/director email + LinkedIn for applicants
+# Free tier: 600 searches/month. Set APOLLO_API_KEY in GitHub Secrets.
+APOLLO_API_KEY       = os.environ.get("APOLLO_API_KEY", "")
+_apollo_cache: dict  = {}   # company_name → enriched contact string
+
 # ── Keywords to hard-exclude from results ────────────────────────
 # These override the classifier — any document containing these exact
 # strings is rejected regardless of other signals.
@@ -414,8 +419,8 @@ KW_WEEKLY = [
     # Kinépolis needs 2,000–5,000m². Missing: cinema-specific vocabulary.
     ("gran superficie comercial",      SECTION_III,  5, "RET+CON"),
     ("equipamiento de ocio",           SECTION_III,  5, "RET+CON"),
-    ("uso recreativo",                 SECTION_III,  4, "RET"),
-    ("sala de espectáculos",           SECTION_III,  4, "RET"),
+    ("uso recreativo",                 SECTION_III,  3, "RET"),
+    ("sala de espectáculos",           SECTION_III,  3, "RET"),
     # NEW: cinema-specific terms Kinépolis actually searches for
 
     # ── ACTIU / MOBILIARIO OFICINA — office + coworking + hospitality ─────────
@@ -464,15 +469,15 @@ KW_WEEKLY = [
     # Malvón (Andrés Ibáñez): 97 stores, 20 new/yr, 15-120m² format.
     # These are restaurant-opening licencia de actividad signals the engine NEVER catches.
     ("local de restauración",          SECTION_III,  5, "RET"),         # restaurant premises
-    ("actividad hostelera",            SECTION_III,  4, "RET"),         # hospitality activity
-    ("uso hostelero",                  SECTION_III,  4, "RET"),         # hotel/catering use
+    ("actividad hostelera",            SECTION_III,  3, "RET"),         # hospitality activity
+    ("uso hostelero",                  SECTION_III,  3, "RET"),         # hotel/catering use
     ("implantación de restaurante",    SECTION_III,  4, "RET"),         # restaurant implantation
 
     # ── SHARING CO / ROOM00 / HOSPE — use-change and VUT signals ────────────
     # Jaime Bello (Sharing Co): cambio de uso = holy grail.
     # Primera ocupación = building complete, needs operator NOW.
     ("división horizontal",            SECTION_III,  4, "HOSPE+PRO"),
-    ("segregación de vivienda",        SECTION_III,  4, "HOSPE+PRO"),
+    ("segregación de vivienda",        SECTION_III,  3, "HOSPE+PRO"),
     ("licencia de primera ocupación",  SECTION_III, 10, "HOSPE+MEP"),
     # NEW: VUT/coliving-specific vocabulary
     ("vivienda de uso turístico",      SECTION_III,  5, "HOSPE"),       # VUT licence = core Sharing Co signal
@@ -486,7 +491,18 @@ KW_WEEKLY = [
     ("parque logístico",               SECTION_III,  5, "IND+MAT"),
     ("centro de distribución",         SECTION_III,  5, "IND+MAT"),
     # NEW: last-mile logistics vocabulary
-    ("nave logística",                 SECTION_III,  5, "IND+MAT"),     # logistics warehouse
+    # ── 5 new high-value keywords ────────────────────────────────────────────
+    # Acta de replanteo = obra STARTED — Kiloutou: equipment needed this week
+    ("acta de comprobación del replanteo", SECTION_III,  3, "CON+ALQUILER"),
+    # Hotels in BOCM — ACTIU + MEP + Sharing Co cambio de uso
+    ("hotel",                              SECTION_III,  3, "ACTIU+MEP+HOSPE"),
+    # Senior housing — fastest-growing Madrid asset class 2025-2030
+    ("residencia de mayores",              SECTION_III,  3, "ACTIU+CON+MEP"),
+    # Retail opening licences — location intelligence for warm leads
+    ("licencia de apertura comercial",     SECTION_III,  3, "RET"),
+    # Environmental clearance → major infra obra in 12-18 months
+    ("declaración de impacto ambiental",   SECTION_III,  3, "INFRA+CON"),
+        ("nave logística",                 SECTION_III,  5, "IND+MAT"),     # logistics warehouse
 ]
 
 KW_EXTRA_FULL = [
@@ -1946,6 +1962,12 @@ GRANT_SIGNALS = [
     "aprobación inicial y provisional",    # Initial + provisional in one document
     "se autoriza la actividad",            # Activity licence granted
     "se concede la autorización",          # Generic authorisation granted
+    # ── CM Contratos / government contract language ───────────────────────────
+    "obras de mantenimiento",
+    "obras de conservación",
+    "obras de reparación urgente",
+    "ejecución de obras de",
+    "formalización del contrato de obras",
 ]
 CONSTRUCTION_SIGNALS = [
     "obra mayor", "obras mayores", "licencia de obras",
@@ -3477,6 +3499,92 @@ def write_permit(p, pdf_url=""):
 # Each thread has its own HTTP session.
 # Sheets writes are serialized via _sheet_lock.
 # ════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════
+# CONTACT DISCOVERY — Apollo.io enrichment (DoubleTrade-style)
+# Maps applicant company → CEO/director name, email, LinkedIn.
+# ════════════════════════════════════════════════════════════
+_SKIP_ENRICH = [
+    "junta de compensación", "junta de propietarios", "ayuntamiento",
+    "comunidad de madrid", "ministerio", "diputación", "mancomunidad",
+    "ute ", "u.t.e.", "soc. coop", "sociedad cooperativa",
+    "particular", "propietario", "herederos", "canal de isabel ii",
+    "emvs", "adif", "metro de madrid",
+]
+
+def _is_enrichable(name: str) -> bool:
+    if not name or len(name.strip()) < 4: return False
+    n = name.lower().strip()
+    if any(p in n for p in _SKIP_ENRICH): return False
+    legal = ["s.a.", "s.l.", "s.l.u.", "s.a.u.", "s.c.", "s.l.p.",
+             " sa", " sl", " slu", " sau", "inc.", "ltd", "gmbh"]
+    return any(n.endswith(lx) or (" "+lx) in n for lx in legal) or len(n.split()) >= 2
+
+
+def enrich_contact(applicant: str) -> str:
+    """
+    DoubleTrade-style contact discovery: company name → key person.
+    Returns: "👤 Juan Pérez (Director General) · ✉️ juan@atipical.com · 🔗 linkedin.com/in/..."
+    Empty string if API not configured, entity not enrichable, or no results.
+    """
+    if not APOLLO_API_KEY or not _is_enrichable(applicant):
+        return ""
+    cache_key = applicant.lower().strip()
+    if cache_key in _apollo_cache:
+        return _apollo_cache[cache_key]
+
+    # Strip legal suffix for cleaner Apollo search
+    clean = re.sub(
+        r",?\s*(S\.A\.U?\.?|S\.L\.U?\.?|S\.C\.|SLU|SAU|SA|SL)\s*$",
+        "", applicant, flags=re.I).strip()
+
+    try:
+        resp = requests.post(
+            "https://api.apollo.io/v1/mixed_people/search",
+            headers={"Content-Type":"application/json",
+                     "Cache-Control":"no-cache",
+                     "X-Api-Key": APOLLO_API_KEY},
+            json={"q_organization_name": clean,
+                  "person_seniorities": ["owner","founder","c_suite","vp","director"],
+                  "per_page": 3, "page": 1},
+            timeout=12,
+        )
+        if resp.status_code != 200:
+            _apollo_cache[cache_key] = ""; return ""
+
+        people = resp.json().get("people", []) or resp.json().get("contacts", [])
+        if not people:
+            _apollo_cache[cache_key] = ""; return ""
+
+        # Sort by seniority — prefer founders/CEOs
+        _PRIO = ["founder","ceo","coo","cto","director general","gerente","socio","president"]
+        people.sort(key=lambda p: next(
+            (i for i,kw in enumerate(_PRIO) if kw in (p.get("title") or "").lower()), 99))
+
+        p    = people[0]
+        name = f"{p.get('first_name','')} {p.get('last_name','')}".strip()
+        title= p.get("title","")
+        email= p.get("email","")
+        li   = p.get("linkedin_url","")
+        phones = p.get("phone_numbers") or []
+        phone  = phones[0].get("raw_number","") if phones else ""
+
+        parts = []
+        if name:  parts.append(f"👤 {name}" + (f" ({title})" if title else ""))
+        if email: parts.append(f"✉️ {email}")
+        if li:    parts.append(f"🔗 {li.replace('https://','')}")
+        if phone: parts.append(f"📞 {phone}")
+
+        result = " · ".join(parts)
+        _apollo_cache[cache_key] = result
+        if result:
+            log(f"  🔍 Apollo: {clean[:30]} → {name} ({title})")
+        return result
+
+    except Exception as e:
+        log(f"  ⚠️ Apollo [{applicant[:25]}]: {e}")
+        _apollo_cache[cache_key] = ""; return ""
+
 def process_one(url, idx, total):
     """Process a single URL. Returns (saved, skipped, error) counts."""
     try:
@@ -3695,6 +3803,11 @@ def process_one(url, idx, total):
                 _et = _re.findall(r'etapa\s+(\d+)[^0-9]*(\d+)\s*meses', _t)
                 if _et:
                     p["obra_timeline"] = " | ".join(f"Etapa {e[0]}: {e[1]} meses" for e in _et[:3])
+
+        # Contact Discovery — enrich high-value leads with Apollo.io
+        if (APOLLO_API_KEY and not p.get("key_contacts")
+                and p.get("lead_score", 0) >= 40 and p.get("applicant")):
+            p["key_contacts"] = enrich_contact(p["applicant"])
 
         if write_permit(p, pdf_url or ""):
             return 1, 0, 0  # saved
@@ -3973,6 +4086,187 @@ def _run_ai_backfill():
     except Exception as e:
         log(f"❌ Backfill error: {e}"); import traceback; traceback.print_exc()
 
+
+# ════════════════════════════════════════════════════════════
+# SOURCE 8: BORME — Boletín Oficial del Registro Mercantil
+# ════════════════════════════════════════════════════════════
+# DoubleTrade's "corporate data" layer: new company registrations,
+# director appointments, capital increases = early signals before
+# a project appears in BOCM.
+#
+# API: https://api.boe.es/BORME/v2/  (free, official, no auth)
+# We target: construction-sector companies newly registered in Madrid.
+# These are promotores who just incorporated → likely have land/project.
+def search_borme_new_companies(date_from, date_to):
+    """
+    Scan BORME for new construction company registrations in Madrid.
+    Returns list of (company_name, directors, capital, date) tuples.
+    These are EARLY SIGNALS — promotores before they appear in BOCM.
+    """
+    results = []
+    # Scan each working day in range
+    d = date_from
+    while d <= date_to:
+        if d.weekday() >= 5:
+            d += timedelta(days=1); continue
+        if not time_ok(need_s=20): break
+
+        borme_url = f"https://api.boe.es/BORME/v2/sumario/{d.strftime('%Y%m%d')}"
+        try:
+            r = safe_get(borme_url, timeout=15)
+            if not r or r.status_code != 200:
+                d += timedelta(days=1); continue
+
+            data = r.json()
+            # BORME sumario has "diario" → "secciones" → "emisores"
+            diario = data.get("data", {}).get("sumario", {}).get("diario", [])
+            if not isinstance(diario, list): diario = [diario]
+
+            for dia in diario:
+                secciones = dia.get("secciones", {}).get("seccion", [])
+                if not isinstance(secciones, list): secciones = [secciones]
+
+                for sec in secciones:
+                    # BORME Section C = Actos inscritos (new companies, capital changes)
+                    if str(sec.get("@codigo","")) not in ("C",): continue
+
+                    emisores = sec.get("emisores", {}).get("emisor", [])
+                    if not isinstance(emisores, list): emisores = [emisores]
+
+                    for em in emisores:
+                        em_name = str(em.get("nombre_emisor","") or "").strip()
+                        em_lower = em_name.lower()
+
+                        # Filter: Madrid construction companies
+                        _CONSTRUCT_TERMS = [
+                            "construcciones", "construc", "promociones", "promot",
+                            "inmobiliaria", "inmobi", "urbanizaciones", "edificaciones",
+                            "inversiones inmobiliarias", "real estate", "desarrollo urbano",
+                            "obras y", "contrata", "rehabilitación", "reform",
+                        ]
+                        if not any(t in em_lower for t in _CONSTRUCT_TERMS):
+                            continue
+
+                        # Check it's a Madrid entity
+                        _madrid_terms = ["madrid","getafe","alcalá","móstoles",
+                                         "leganés","alcobendas","pozuelo","majadahonda"]
+                        # (BORME entries don't always have province in title — keep all
+                        # construction companies for now, the promotor DB enriches later)
+
+                        items = em.get("items", {}).get("item", [])
+                        if not isinstance(items, list): items = [items]
+
+                        for item in items:
+                            item_txt = str(item.get("@url","") or item.get("#text","") or "")
+                            results.append({
+                                "company":  em_name,
+                                "date":     d.strftime("%Y-%m-%d"),
+                                "borme_id": item_txt,
+                            })
+
+        except Exception:
+            pass
+
+        d += timedelta(days=1)
+
+    return results
+
+
+# ════════════════════════════════════════════════════════════
+# WATCHLIST ALERTS — notify subscribers of phase changes
+# ════════════════════════════════════════════════════════════
+_WATCHLIST_HDRS = ["email","source_url","expediente","fecha_added",
+                   "phase_at_add","last_alerted","muni","description"]
+
+def _get_watchlist_tab(spreadsheet):
+    try: return spreadsheet.worksheet("Watchlist")
+    except Exception:
+        ws = spreadsheet.add_worksheet("Watchlist", rows=500, cols=8)
+        ws.append_row(_WATCHLIST_HDRS); return ws
+
+def send_watchlist_alerts():
+    """Run after each engine cycle — email subscribers when phase advances."""
+    gf = os.environ.get("GMAIL_FROM","")
+    gp = os.environ.get("GMAIL_APP_PASSWORD","")
+    if not all([gf, gp]): return
+    ws_main = get_sheet()
+    if not ws_main: return
+    try:
+        ss   = ws_main.spreadsheet
+        wl   = _get_watchlist_tab(ss)
+        subs = wl.get_all_records()
+        if not subs: return
+        leads = ss.worksheet("Leads").get_all_records()
+        # Build expediente → latest row map
+        exp_map = {}
+        for row in leads:
+            exp = str(row.get("Expediente","") or "").strip()
+            if not exp: continue
+            if exp not in exp_map:
+                exp_map[exp] = row
+            else:
+                try:
+                    from dateutil import parser as _dp2
+                    d_new = _dp2.parse(str(row.get("Date Found","") or ""))
+                    d_old = _dp2.parse(str(exp_map[exp].get("Date Found","") or ""))
+                    if d_new > d_old: exp_map[exp] = row
+                except Exception: pass
+        _PHASE_ORDER = {"inicial":1,"en_tramite":2,"solicitud":2,"definitivo":3,
+                        "licitacion":4,"adjudicacion":5,"en_obra":6,"primera_ocupacion":7}
+        today_s = datetime.now().strftime("%Y-%m-%d")
+        updates = []
+        for i, sub in enumerate(subs, start=2):
+            email  = str(sub.get("email","") or "").strip()
+            expd   = str(sub.get("expediente","") or "").strip()
+            p_add  = str(sub.get("phase_at_add","") or "").strip()
+            p_last = str(sub.get("last_alerted","") or "").strip()
+            if not email or not expd or p_last == today_s: continue
+            cur = exp_map.get(expd)
+            if not cur: continue
+            p_cur = str(cur.get("Phase","") or "").strip()
+            if _PHASE_ORDER.get(p_cur.lower(),0) <= _PHASE_ORDER.get(p_add.lower(),0): continue
+            # Phase advanced — send alert
+            _PHASE_LABELS = {"inicial":"🟡 Aprobación Inicial","definitivo":"🟢 Aprobación Definitiva",
+                             "licitacion":"🔵 Licitación","adjudicacion":"🏆 Adjudicación",
+                             "en_obra":"🏗️ En Obra","primera_ocupacion":"⚪ 1ª Ocupación"}
+            pl = _PHASE_LABELS.get(p_cur.lower(), p_cur)
+            subj = f"🚨 PlanningScout — {cur.get('Municipality','')}: {expd} → {pl}"
+            body = f"""<html><body style="font-family:Arial,sans-serif;max-width:600px;margin:20px auto">
+<div style="background:#1565c0;color:#fff;padding:18px 24px;border-radius:8px 8px 0 0">
+  <h2 style="margin:0;font-size:18px">🔔 Alerta de proyecto — PlanningScout</h2>
+</div>
+<div style="border:1px solid #e0e0e0;border-top:0;padding:20px;border-radius:0 0 8px 8px">
+  <p><strong>Expediente:</strong> {expd}</p>
+  <p><strong>Municipio:</strong> {cur.get('Municipality','')}</p>
+  <p><strong>Dirección:</strong> {cur.get('Full Address','')}</p>
+  <p><strong>PEM:</strong> €{cur.get('Declared Value PEM (€)','')}</p>
+  <div style="background:#e8f5e9;border-left:4px solid #2e7d32;padding:12px;margin:14px 0;border-radius:4px">
+    <strong style="color:#1b5e20">Nueva fase: {pl}</strong>
+    <span style="color:#666;font-size:12px;margin-left:8px">(antes: {p_add})</span>
+  </div>
+  <p style="font-size:13px">{str(cur.get('Description',''))[:200]}</p>
+  {'<a href="' + str(cur.get('Source URL','')) + '" style="background:#1565c0;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-size:13px">↗ Ver en BOCM</a>' if cur.get('Source URL') else ''}
+  <p style="font-size:11px;color:#aaa;margin-top:18px">Para cancelar esta alerta: info@planningscout.com</p>
+</div></body></html>"""
+            try:
+                import smtplib as _sm
+                from email.mime.multipart import MIMEMultipart as _MMP
+                from email.mime.text import MIMEText as _MMT
+                msg = _MMP("alternative")
+                msg["Subject"] = subj; msg["From"] = gf; msg["To"] = email
+                msg.attach(_MMT(body,"html","utf-8"))
+                with _sm.SMTP_SSL("smtp.gmail.com",465) as s2:
+                    s2.login(gf, gp); s2.sendmail(gf, [email], msg.as_string())
+                log(f"  🔔 Alert sent: {email} | {expd} → {pl}")
+                updates.append((i, today_s))
+            except Exception as e2: log(f"  ⚠️ Alert: {e2}")
+        if updates:
+            try:
+                wl.spreadsheet.values_batch_update({"valueInputOption":"USER_ENTERED",
+                    "data":[{"range":f"Watchlist!F{r}","values":[[d]]} for r,d in updates]})
+            except Exception: pass
+    except Exception as e: log(f"  ⚠️ Watchlist: {e}")
+
 def run():
     if args.digest:
         log("📧 Digest-only mode"); get_sheet(); send_digest(); return
@@ -3986,7 +4280,7 @@ def run():
     date_from = today - timedelta(weeks=WEEKS_BACK)
 
     log("=" * 70)
-    log(f"🏗️  PlanningScout Madrid — Engine v13 (CM-fix+datos-proxy+smtp-fix+fuente-labels)")
+    log(f"🏗️  PlanningScout Madrid — Engine v14 (datos-noProbe+21kws+CM14d+Apollo+watchlist+BOCM107+BORME)")
     log(f"📅  {today.strftime('%Y-%m-%d %H:%M')}  |  Mode: {MODE.upper()}")
     log(f"📆  {date_from.strftime('%d/%m/%Y')} → {date_to.strftime('%d/%m/%Y')} ({WEEKS_BACK}w)")
     log(f"⚙️  {N_WORKERS} processing workers  |  ⏱️ Budget: {MAX_RUN_MINUTES}min")
@@ -4662,13 +4956,20 @@ def search_cm_contratos(date_from, date_to, global_seen):
     Returns: list of (url, title, entity, budget, date) tuples for processing
     """
     CM_FEED = "https://contratos-publicos.comunidad.madrid/feed/licitaciones2"
+    # Fallback feeds — CM publishes several ATOM feeds
+    CM_FEEDS_EXTRA = [
+        "https://contratos-publicos.comunidad.madrid/feed/licitaciones",
+        "https://contratos-publicos.comunidad.madrid/feed/adjudicaciones2",
+    ]
     # Keywords to filter construction-relevant contracts
     _CONSTR_KWS = [
         "obra", "construcción", "urbanización", "rehabilitación", "reforma",
         "saneamiento", "abastecimiento", "infraestructura", "vial", "pavimentación",
         "demolición", "edificio", "instalación", "reparación", "conservación",
-        "mantenimiento de obra", "canalización", "red de", "colector",
+        "mantenimiento", "canalización", "red de", "colector",
         "nave", "almacén", "polígono", "parque", "ampliación",
+        "suministro e instalación", "actuaciones de mejora", "ejecución de",
+        "proyecto de", "contrato de obras", "obras en",
     ]
     results = []
     seen_local = set()
@@ -4714,12 +5015,15 @@ def search_cm_contratos(date_from, date_to, global_seen):
             if not url or not title: continue
             if url in seen_local or url in _seen_urls: continue
             
-            # Filter: date range check
+            # Filter: accept anything published in the last 14 days
+            # (not just date_from, because the CM feed accumulates recent items
+            # and we might catch contracts published slightly before our window)
             if published:
                 try:
                     from dateutil import parser as dp
                     pub_date = dp.parse(published).replace(tzinfo=None)
-                    if pub_date.date() < date_from.date():
+                    cutoff   = date_from - timedelta(days=14)
+                    if pub_date.date() < cutoff.date():
                         continue
                 except Exception:
                     pass
@@ -4733,6 +5037,41 @@ def search_cm_contratos(date_from, date_to, global_seen):
             results.append((url, title, summary[:500]))
         
         log(f"  🏗️ CM Contratos ATOM: {len(results)} construction contracts found")
+
+        # ── Try extra CM feeds if primary returned 0 ──────────────────────────
+        if not results:
+            for _extra_feed in CM_FEEDS_EXTRA:
+                if not time_ok(need_s=30): break
+                try:
+                    r2 = safe_get(_extra_feed, timeout=20)
+                    if not r2 or r2.status_code != 200: continue
+                    root2 = ET.fromstring(r2.content)
+                    entries2 = root2.findall(".//{http://www.w3.org/2005/Atom}entry") or root2.findall(".//entry")
+                    for entry in entries2:
+                        def _get2(tag):
+                            el = entry.find(f"{{http://www.w3.org/2005/Atom}}{tag}")
+                            if el is None: el = entry.find(tag)
+                            return (el.text or "").strip() if el is not None else ""
+                        title2   = _get2("title")
+                        url2_el  = entry.find("{http://www.w3.org/2005/Atom}link") or entry.find("link")
+                        url2     = url2_el.get("href","") if url2_el is not None else ""
+                        summary2 = _get2("summary") + " " + _get2("content")
+                        pub2     = _get2("published") or _get2("updated")
+                        if not url2 or not title2: continue
+                        if url2 in seen_local or url2 in _seen_urls: continue
+                        if pub2:
+                            try:
+                                from dateutil import parser as dp2
+                                pd2 = dp2.parse(pub2).replace(tzinfo=None)
+                                if pd2.date() < (date_from - timedelta(days=14)).date(): continue
+                            except Exception: pass
+                        c2 = (title2 + " " + summary2).lower()
+                        if not any(kw in c2 for kw in _CONSTR_KWS): continue
+                        seen_local.add(url2)
+                        results.append((url2, title2, summary2[:500]))
+                except Exception: continue
+            if results:
+                log(f"  🏗️ CM Contratos extra feeds: +{len(results)} total")
         
     except Exception as e:
         log(f"  ⚠️ CM Contratos error: {e}")
@@ -4854,158 +5193,183 @@ def search_datos_madrid(date_from, date_to, global_seen):
     """
     SOURCE 7: datos.madrid.es Open Data API — Licencias Urbanísticas.
 
-    WHY THIS IS THE MOST IMPORTANT NEW SOURCE:
-    ─────────────────────────────────────────
-    BOCM Section III publishes planning instruments (plan especial, urbanización,
-    reparcelación). It does NOT publish individual building licences for Madrid
-    capital — Ayuntamiento de Madrid uses its own Sistema de Licencias (SLIM).
+    datos.madrid.es publishes EVERY individual licencia urbanística granted by
+    the Ayuntamiento de Madrid since 2015. This data is NOT in BOCM.
 
-    datos.madrid.es publishes every individual licencia urbanística and
-    declaración responsable granted by the Ayuntamiento de Madrid since 2015.
-    This is EXACTLY what was missing from the database:
-      - Obra mayor nueva construcción (edificios, naves)
-      - Cambio de uso (oficinas→vivienda, local→residencial) ← Sharing Co holy grail
-      - Rehabilitación integral ← hospe + MEP opportunity
-      - Primera ocupación ← building complete, operator needed TODAY
-      - Declaración responsable de obra mayor ← fast-track licences
+    ACCESS STRATEGY (WAF bypass):
+    ──────────────────────────────
+    datos.madrid.es blocks cloud/datacenter IPs at CDN level.
+    We use a layered approach — most reliable first:
 
-    RESOURCE: resource_id = 300193-10-licencias-urbanisticas
-    API: https://datos.madrid.es/api/3/action/datastore_search
-    Auth: None (public open data, free commercial use)
-    Update freq: Continuously updated as licences are granted
+    TIER 1 (always wins): Cloudflare Worker proxy
+      Set DATOS_MADRID_PROXY = https://your-worker.workers.dev in GitHub Secrets.
+      The Worker runs on Cloudflare edge IPs that datos.madrid.es does not block.
+      Setup: workers.cloudflare.com → new Worker → paste JS from DATOS_MADRID_PROXY
+      constant → Deploy → copy URL → add as GitHub secret.
 
-    FIELDS RETURNED:
-      EXPEDIENTE          → licence reference number
-      CLASE_LICENCIA      → "Licencia urbanística" | "Declaración responsable"
-      OBJETO              → type of work (cambio de uso, obra mayor, etc.)
-      DESCRIPCION         → full description of the work
-      DIRECCION           → full street address
-      BARRIO              → neighbourhood (Malasaña, Chamberí, etc.)
-      DISTRITO            → district (Centro, Salamanca, etc.)
-      FECHA_OTORGAMIENTO  → grant date
-      RESULTADO           → "Otorgada" | "En tramitación" | "Inadmitida"
-      PEM                 → presupuesto de ejecución material (€)
-      COORDINADA_X/Y      → UTM ETRS89 coordinates
+    TIER 2 (fallback, no setup needed): Direct with extended timeout
+      GitHub Actions IPs get TCP connection accepted (not instantly rejected).
+      The server stalls the HTTP response (tarpit behavior).
+      We use 45s timeout, full browser fingerprint, session warmup.
+      Works occasionally depending on CDN edge node assignment.
 
-    WARM LEAD VALUE:
-      Sharing Co / Room00: every cambio de uso in prime Madrid barrios
-      Instaladores MEP: every obra mayor > €80K
-      Gran Constructora: obra mayor nueva construcción in Madrid capital
-      ACTIU: office buildings, hotels, hospitals in Madrid
+    TIER 3 (last resort): Alternative CKAN SQL endpoint
+      Different URL path, sometimes different CDN routing.
+
+    NO FAST-FAIL PROBE — the probe was wrong:
+      Sandbox/AWS IPs → instant 403 (probe detects correctly but exits early)
+      GitHub Actions IPs → TCP connects, HTTP stalls (probe times out but so does GH)
+      Solution: let each keyword try independently; abort after 5 consecutive fails.
     """
-    DATOS_API    = "https://datos.madrid.es/api/3/action/datastore_search"
-    RESOURCE_ID  = "300193-10-licencias-urbanisticas"
+    DATOS_API   = "https://datos.madrid.es/api/3/action/datastore_search"
+    DATOS_SQL   = "https://datos.madrid.es/api/3/action/datastore_search_sql"
+    RESOURCE_ID = "300193-10-licencias-urbanisticas"
 
-    # Keywords targeting each warm-lead profile — searched as free-text in OBJETO+DESCRIPCION
-    # Each keyword targets one or more profiles. Ordered by commercial priority.
+    # ── 21 keywords — ordered by commercial value ─────────────────────────────
+    # Based on DoubleTrade data coverage: cambio de uso, obra mayor, rehabilitación
+    # are the three highest-yield types for Madrid capital licencias.
     DATOS_KEYWORDS = [
-        ("cambio de uso",           "hospe+mep+retail"),
-        ("cambio de destino",        "hospe+mep+retail"),
-        ("obra mayor",               "constructora+mep+alquiler+materiales"),
-        ("rehabilitación integral",  "hospe+mep+materiales"),
-        ("nueva construcción",       "constructora+mep+alquiler+materiales"),
-        ("primera ocupación",        "hospe+mep"),
-        ("reforma integral",         "hospe+mep"),
-        ("declaración responsable",  "mep+constructora"),
-        ("vivienda",                 "hospe+constructora+promotores"),
-        ("oficinas",                 "actiu+mep"),
+        # Hospe / Sharing Co — cambio de uso is the holy grail for flexliving
+        ("cambio de uso",              "hospe+mep+retail"),
+        ("cambio de destino",          "hospe+mep+retail"),
+        ("modificación de uso",        "hospe+mep+retail"),
+        ("cambio de actividad",        "hospe+retail"),
+        # Primera ocupación — building done, operator needed TODAY
+        ("primera ocupación",          "hospe+mep"),
+        ("licencia de primera",        "hospe+mep"),
+        # Obra mayor — Gran Constructora + MEP + Kiloutou
+        ("obra mayor",                 "constructora+mep+alquiler+materiales"),
+        ("nueva construcción",         "constructora+mep+alquiler+materiales"),
+        ("nueva planta",               "constructora+mep+alquiler+materiales"),
+        # Rehabilitación — MEP + hospe
+        ("rehabilitación",             "hospe+mep+materiales"),
+        ("reforma integral",           "hospe+mep+materiales"),
+        ("gran rehabilitación",        "hospe+mep+materiales"),
+        # Declaración responsable — fast-track licencias
+        ("declaración responsable",    "mep+constructora"),
+        # ACTIU targets — offices, hotels, coworking
+        ("oficinas",                   "actiu+mep"),
+        ("hotel",                      "actiu+mep+hospe"),
+        ("coworking",                  "actiu+mep"),
+        ("residencia de estudiantes",  "actiu+con+mep"),
+        # Retail
+        ("local comercial",            "retail+mep"),
+        ("apertura de",                "retail"),
+        # Industrial / logístico
+        ("nave industrial",            "industrial+alquiler+materiales"),
+        ("almacén",                    "industrial+materiales"),
     ]
 
-    # ── Fixed PEM parser ─────────────────────────────────────────────────────
+    # ── Fixed PEM parser ──────────────────────────────────────────────────────
     def _parse_pem_es(raw):
-        """Parse Spanish-formatted PEM value: '150.000,00' → 150000.0"""
+        """Parse Spanish number '150.000,00' → 150000.0"""
         s = str(raw or "").strip()
         if not s or s in ("None", "nan", ""): return 0.0
         try:
-            if "," in s and "." in s:   return float(s.replace(".", "").replace(",", "."))
-            if "," in s:                return float(s.replace(",", "."))
+            if "," in s and "." in s:  return float(s.replace(".", "").replace(",", "."))
+            if "," in s:               return float(s.replace(",", "."))
             return float(s)
-        except Exception:               return 0.0
+        except Exception:              return 0.0
 
-    # ── Proxy-aware request builder ──────────────────────────────────────────
-    # datos.madrid.es blocks ALL cloud/datacenter IPs (GitHub Actions = 403).
-    # If DATOS_MADRID_PROXY is set → route through Cloudflare Worker proxy.
-    # If not set → try direct (will block from GitHub Actions — logs clearly).
-    #
-    # To enable: deploy the CF Worker described in the DATOS_MADRID_PROXY
-    # constant near the top of this file, then set the GitHub secret.
     from dateutil import parser as _dp
 
-    def _dm_get(api_url):
+    # ── Session builder — full browser fingerprint ────────────────────────────
+    def _make_dm_session():
+        s = requests.Session()
+        s.verify = False
+        s.headers.update({
+            "User-Agent":      ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/124.0.0.0 Safari/537.36"),
+            "Accept":          "application/json, text/plain, */*",
+            "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Origin":          "https://datos.madrid.es",
+            "Referer":         "https://datos.madrid.es/dataset/300193-0-licencias-urbanisticas",
+            "DNT":             "1",
+            "Connection":      "keep-alive",
+            "Sec-Fetch-Dest":  "empty",
+            "Sec-Fetch-Mode":  "cors",
+            "Sec-Fetch-Site":  "same-origin",
+        })
+        return s
+
+    # ── Proxy-aware request ───────────────────────────────────────────────────
+    def _dm_get(api_url, sess=None):
         """
-        Make one datos.madrid.es API request.
-        Returns requests.Response or None.
-        Uses DATOS_MADRID_PROXY if set, else tries direct.
+        Returns (response_or_None, fail_reason_str).
+        fail_reason: 'blocked' | 'timeout' | 'error' | None (success)
         """
         if DATOS_MADRID_PROXY:
-            # Route through Cloudflare Worker proxy
+            # TIER 1: Cloudflare Worker proxy — always bypasses WAF
             proxy_url = f"{DATOS_MADRID_PROXY}?url={quote(api_url, safe='')}"
             try:
-                r = requests.get(
-                    proxy_url, timeout=20, verify=False,
-                    headers={
-                        "User-Agent": "PlanningScout/1.0",
-                        "Accept": "application/json",
-                    })
-                return r if r.status_code == 200 else None
-            except Exception:
-                return None
-        else:
-            # Direct access — will be blocked from GitHub Actions IPs
-            # but works if run locally with a Spanish IP or residential proxy
-            dm_sess = requests.Session()
-            dm_sess.verify = False
-            dm_sess.headers.update({
-                "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                   "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                   "Chrome/124.0.0.0 Safari/537.36",
-                "Accept":          "application/json, text/plain, */*",
-                "Accept-Language": "es-ES,es;q=0.9",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Referer":         "https://datos.madrid.es/dataset/300193-0-licencias-urbanisticas",
-                "DNT":             "1",
-            })
-            try:
-                r = dm_sess.get(api_url, timeout=12, allow_redirects=True)
-                return r if r.status_code == 200 else None
-            except Exception:
-                return None
+                r = requests.get(proxy_url, timeout=25, verify=False,
+                                 headers={"User-Agent": "PlanningScout/1.0",
+                                          "Accept":     "application/json"})
+                if r.status_code == 200: return r, None
+                return None, f"proxy-{r.status_code}"
+            except requests.Timeout:
+                return None, "proxy-timeout"
+            except Exception as e:
+                return None, f"proxy-error"
 
-    # ── Check proxy / direct availability ────────────────────────────────────
-    if not DATOS_MADRID_PROXY:
-        # Probe with a quick test to detect WAF block early
-        _probe = _dm_get(f"{DATOS_API}?resource_id={RESOURCE_ID}&limit=1")
-        if _probe is None:
-            log(f"  ❌ datos.madrid: BLOCKED — datos.madrid.es WAF rejects cloud IPs.")
-            log(f"     Deploy a Cloudflare Worker proxy and set DATOS_MADRID_PROXY secret")
-            log(f"     (see setup instructions in engine source near DATOS_MADRID_PROXY)")
-            log(f"  🏛️ datos.madrid.es: 0 licencias (WAF/IP blocked — proxy not configured)")
-            return []
+        # TIER 2: Direct with full session + 45s timeout
+        s = sess or _make_dm_session()
+        try:
+            r = s.get(api_url, timeout=45, allow_redirects=True)
+            if r.status_code == 200:
+                return r, None
+            if r.status_code == 403:
+                return None, "blocked"    # definitive CDN block for this IP
+            return None, f"http-{r.status_code}"
+        except requests.Timeout:
+            return None, "timeout"        # GH Actions tarpit — try next keyword
+        except Exception:
+            return None, "error"
+
+    # ── Shared session for all direct requests (avoids repeated TLS handshakes) ─
+    _dm_sess = _make_dm_session()
+
+    # ── Source status log ─────────────────────────────────────────────────────
+    if DATOS_MADRID_PROXY:
+        log(f"  🔀 datos.madrid: via proxy {DATOS_MADRID_PROXY[:50]}")
     else:
-        log(f"  🔀 datos.madrid: using proxy at {DATOS_MADRID_PROXY[:50]}")
+        log(f"  🌐 datos.madrid: direct (45s timeout per keyword — may work from GH Actions)")
 
     # ── Query loop ────────────────────────────────────────────────────────────
-    results  = []
-    seen_exp = set()
-    _dm_fail = 0   # consecutive failures — abort after 3
+    results   = []
+    seen_exp  = set()
+    consec_fail = 0   # consecutive keyword failures
+    blocked_at  = None
 
     for kw, _profile_hint in DATOS_KEYWORDS:
         if not time_ok(need_s=30): break
-        if _dm_fail >= 3:
-            log(f"  ❌ datos.madrid: 3 consecutive failures — aborting")
+        if consec_fail >= 5:
+            log(f"  ⚠️ datos.madrid: 5 consecutive failures — aborting remaining keywords")
+            break
+        if blocked_at:
+            # Definitive 403 block detected — no point trying more keywords
             break
 
         api_url = (f"{DATOS_API}?resource_id={quote(RESOURCE_ID)}"
                    f"&q={quote(kw)}&limit=100&offset=0")
-        r = _dm_get(api_url)
+
+        r, fail_reason = _dm_get(api_url, _dm_sess)
 
         if r is None:
-            _dm_fail += 1
-            log(f"  ⚠️ datos.madrid [{kw}]: failed ({_dm_fail}/3)")
-            time.sleep(1.0)
+            if fail_reason == "blocked":
+                blocked_at = kw
+                log(f"  ❌ datos.madrid: WAF/IP block (HTTP 403) — this IP is blocked.")
+                log(f"     Fix: deploy Cloudflare Worker proxy (5 min, free)")
+                log(f"     Setup instructions in engine source at DATOS_MADRID_PROXY constant")
+                break
+            consec_fail += 1
+            log(f"  ⚠️ datos.madrid [{kw}]: {fail_reason} ({consec_fail}/5)")
+            time.sleep(1.5)
             continue
 
-        _dm_fail = 0  # reset on success
+        consec_fail = 0   # reset on any success
 
         try:
             data = r.json()
@@ -5016,48 +5380,70 @@ def search_datos_madrid(date_from, date_to, global_seen):
             continue
 
         records = data.get("result", {}).get("records", [])
+        kw_hits = 0
 
         for rec in records:
             exp = str(rec.get("EXPEDIENTE", "")).strip()
             if not exp or exp in seen_exp:
                 continue
 
-            # Date filter
-            fecha = str(rec.get("FECHA_OTORGAMIENTO", "") or "").strip()
+            # Date filter — use FECHA_OTORGAMIENTO or FECHA_SOLICITUD fallback
+            fecha = (str(rec.get("FECHA_OTORGAMIENTO","") or "")
+                     or str(rec.get("FECHA_SOLICITUD","")  or "")).strip()
             if fecha:
                 try:
                     rec_date = _dp.parse(fecha[:10]).date()
                     if rec_date < date_from.date() or rec_date > date_to.date():
                         continue
                 except Exception:
-                    pass
+                    pass   # keep if parse fails
 
-            # Only useful results
-            resultado = str(rec.get("RESULTADO", "")).strip().lower()
-            if resultado in ("inadmitida", "desistida", "caducada", "denegada"):
+            # Skip failed/withdrawn results
+            resultado = str(rec.get("RESULTADO","") or "").strip().lower()
+            if resultado in ("inadmitida","desistida","caducada","denegada","archivada"):
                 continue
 
-            obj      = str(rec.get("OBJETO", "") or "").lower()
-            desc_l   = str(rec.get("DESCRIPCION", "") or "").lower()
-            combined = obj + " " + desc_l
+            # Build combined text for filtering
+            obj      = str(rec.get("OBJETO","")      or "").lower()
+            desc_l   = str(rec.get("DESCRIPCION","") or "").lower()
+            barrio   = str(rec.get("BARRIO","")      or "").lower()
+            distrito = str(rec.get("DISTRITO","")    or "").lower()
+            combined = f"{obj} {desc_l} {barrio} {distrito}"
 
             if any(exc in combined for exc in KEYWORDS_EXCLUDE):
                 continue
 
-            # Fixed PEM parsing (old double-replace destroyed decimal places)
+            # Noise filter — very specific minor works
+            _DM_NOISE = [
+                "cambio de escaparate", "cambio de rótulo", "instalación de rótulo",
+                "velador", "terraza desmontable", "cata de terreno", "ensayo geotécnico",
+                "antena de telefonía",
+            ]
+            if any(n in combined for n in _DM_NOISE):
+                continue
+
+            # Skip micro works (<€30K PEM)
             pem_val = _parse_pem_es(rec.get("PEM"))
             if 0 < pem_val < 30_000:
-                continue   # skip micro-scale works
+                continue
 
             seen_exp.add(exp)
+            exp_enc    = exp.replace("/","%2F").replace(" ","%20")
             source_url = (f"https://sede.madrid.es/portal/site/tramites/"
                           f"menuitem.62876cb64654a55e2dbd7003a8a409a0/"
-                          f"?expediente={exp}")
+                          f"?expediente={exp_enc}")
             results.append((exp, rec, source_url, _profile_hint))
+            kw_hits += 1
 
+        if kw_hits > 0:
+            log(f"  🏛️ datos.madrid [{kw}]: +{kw_hits}")
         time.sleep(0.5)
 
-    log(f"  🏛️ datos.madrid.es: {len(results)} licencias found")
+    if not results and not blocked_at:
+        log(f"  🏛️ datos.madrid: 0 licencias in date range "
+            f"({'via proxy' if DATOS_MADRID_PROXY else 'direct — if consistently 0, set DATOS_MADRID_PROXY'})")
+    elif results:
+        log(f"  🏛️ datos.madrid: {len(results)} licencias found total")
     return results
 
 
