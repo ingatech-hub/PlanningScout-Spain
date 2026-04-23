@@ -4282,7 +4282,7 @@ def run():
     date_from = today - timedelta(weeks=WEEKS_BACK)
 
     log("=" * 70)
-    log(f"🏗️  PlanningScout Madrid — Engine v14.1 (datos-CSV+ATOM+HTML-fix+noAPIcall)")
+    log(f"🏗️  PlanningScout Madrid — Engine v15 (datos-XLSX+daily-kwscan+S3daily+tuple-fix)")
     log(f"📅  {today.strftime('%Y-%m-%d %H:%M')}  |  Mode: {MODE.upper()}")
     log(f"📆  {date_from.strftime('%d/%m/%Y')} → {date_to.strftime('%d/%m/%Y')} ({WEEKS_BACK}w)")
     log(f"⚙️  {N_WORKERS} processing workers  |  ⏱️ Budget: {MAX_RUN_MINUTES}min")
@@ -4368,16 +4368,27 @@ def run():
         log(f"  Day scan total: +{day_total} | {len(all_urls)} unique")
 
         # ── SOURCE 2: Keyword searches ───────────────────────────────────────────
-        # DAILY: Skip (day scan covers everything)
-        # WEEKLY: 25 focused keywords, 1-week chunks
-        # FULL: All keywords, full date-chunking
+        # DAILY:  Top 15 highest-yield keywords over last 2 days (fast, ~15min)
+        # WEEKLY: All 107 keywords, 1-week chunks
+        # FULL:   All keywords, full date-chunking
 
-        if MODE != "daily":
+        if True:   # runs in ALL modes — daily uses short KW list + 2-day window
             log(f"\n{'─'*55}")
             log(f"🔎 SOURCE 2: Keyword search  [{MODE} mode]")
 
             kw_list = KW_WEEKLY
             if MODE == "full": kw_list = KW_WEEKLY + KW_EXTRA_FULL
+            # Daily mode: use top 15 highest-yield KWs only (fast ~15min, still valuable)
+            if MODE == "daily":
+                _DAILY_KWS = {
+                    "obra mayor","licitación de obras","aprobación definitiva",
+                    "proyecto de urbanización","base imponible","primera ocupación",
+                    "cambio de uso","junta de compensación","rehabilitación integral",
+                    "declaración responsable","nueva construcción","adjudicación de obras",
+                    "plan especial","reparcelación","nave industrial",
+                }
+                kw_list = [(kw,sec,min(max_pg,3),tag)
+                           for kw,sec,max_pg,tag in KW_WEEKLY if kw in _DAILY_KWS]
 
             kw_total  = 0
             kw_n      = len(kw_list)
@@ -4404,7 +4415,7 @@ def run():
             log(f"  Keyword total: +{kw_total} | {len(all_urls)} unique")
 
         # ── SOURCE 3: Section V (ICIO notifications) ─────────────────────────────
-        if MODE in ("weekly","full") and time_ok(need_s=120):
+        if time_ok(need_s=120):   # ← runs in ALL modes
             log(f"\n{'─'*55}")
             log(f"📢 SOURCE 3: Section V (ICIO, anuncios)")
             # Scan last 4 weeks for Section V (ICIO notifications are recent)
@@ -4507,6 +4518,9 @@ def run():
             log(f"🏛️  SOURCE 7: datos.madrid.es (licencias urbanísticas Madrid capital)")
             dm_items = search_datos_madrid(date_from, date_to, global_seen)
             if dm_items:
+                # Normalize tuple format: old=(exp,rec,url,hint), new=(exp,rec,url,hint,aw,phase)
+                dm_items = [(t[0],t[1],t[2],t[3],t[4] if len(t)>4 else "",
+                             t[5] if len(t)>5 else "") for t in dm_items]
                 dm_saved = dm_skipped = dm_errors = 0
                 with ThreadPoolExecutor(max_workers=min(N_WORKERS, 3)) as executor:
                     dm_futures = {
@@ -4514,7 +4528,7 @@ def run():
                             process_datos_madrid_item,
                             exp, rec, source_url, profile_hint, idx+1, len(dm_items)
                         ): exp
-                        for idx, (exp, rec, source_url, profile_hint) in enumerate(dm_items)
+                        for idx, (exp, rec, source_url, profile_hint, _aw, _ph) in enumerate(dm_items)
                         if time_ok(need_s=5)
                     }
                     for future in as_completed(dm_futures):
@@ -5191,103 +5205,101 @@ def search_datos_madrid(date_from, date_to, global_seen):
     """
     SOURCE 7: datos.madrid.es — Licencias Urbanísticas Ayuntamiento de Madrid.
 
-    ╔══════════════════════════════════════════════════════════════════╗
-    ║  ROOT CAUSE FIX (v14.1)                                         ║
-    ║                                                                  ║
-    ║  Previous error: used /api/3/action/datastore_search → HTTP 404 ║
-    ║  datos.madrid.es does NOT run CKAN Datastore. That endpoint      ║
-    ║  simply does not exist on their server.                          ║
-    ║                                                                  ║
-    ║  Correct URL: /egob/catalogo/300193-10-licencias-urbanisticas    ║
-    ║  The portal publishes CSV/ATOM/JSON files at this path.          ║
-    ╚══════════════════════════════════════════════════════════════════╝
+    WHAT THIS SOURCE PROVIDES (different from BOCM):
+    ─────────────────────────────────────────────────
+    BOCM covers all 179 Madrid municipalities — but for Madrid CAPITAL,
+    the Ayuntamiento uses its own SLIM system and publishes every licence
+    as per-year XLSX files on datos.madrid.es. This covers:
+      - Declaración Responsable Residencial   (residential works)
+      - LICENCIA URBANÍSTICA RESIDENCIAL      (residential building licence)
+      - Declaración Responsable Actividad     (commercial activity)
+      - LICENCIA URBANÍSTICA DE ACTIVIDAD     (commercial licence)
+      - Declaración Responsable - Primera Ocupación (building done!)
+      - Licencia de funcionamiento de actividad
 
-    ACCESS TIERS (tried in order, first success wins):
+    DOWNLOAD URL (confirmed from portal screenshots):
+      https://datos.madrid.es/egob/catalogo/300193-[N]-licencias-urbanisticas-xlsx.xlsx
+      where [N] changes each year — the engine tries multiple candidates.
+      2026 = 300193-2  (78 KB,  ~520 rows = Jan-current)
+      2025 = 300193-1  (1.5 MB, ~10K rows = full year)
+      
+    XLSX COLUMNS (from actual downloaded file):
+      Fecha concesión, Procedimiento, Tipo de expediente,
+      Tipo Via + Nombre Via + Número + Distrito + Barrio (full address),
+      Interesado (Persona jurídica / Persona física), NDP_EDIFICIO
 
-    TIER 1 — Proxy (DATOS_MADRID_PROXY secret set):
-      Cloudflare Worker routes request through edge IP → always works
-      Setup: workers.cloudflare.com (5 min, free) — see constant near top
+    NOTE: 'Objeto de la licencia' is EMPTY in this dataset (no description).
+    We use Tipo de expediente to classify leads by value.
 
-    TIER 2 — Direct CSV download:
-      https://datos.madrid.es/egob/catalogo/300193-10-licencias-urbanisticas.csv
-      GitHub Actions IPs reach the origin (proved by 404 on /api/3/).
-      Origin serves /egob/catalogo/ files → should return 200.
-
-    TIER 3 — Direct ATOM feed:
-      https://datos.madrid.es/egob/catalogo/300193-10-licencias-urbanisticas.atom
-      Same origin path, XML format, smaller than CSV.
-
-    TIER 4 — HTML search scraping:
-      https://datos.madrid.es/dataset/?q=obra+mayor&sort=issued+desc
-      Scrape search result cards → find dataset download links.
-
-    FIELDS IN CSV (exact column names):
-      EXPEDIENTE, CLASE_LICENCIA, OBJETO, DESCRIPCION, DIRECCION,
-      BARRIO, DISTRITO, FECHA_SOLICITUD, FECHA_OTORGAMIENTO,
-      RESULTADO, PEM, COORDINADA_X, COORDINADA_Y
+    ACCESS:
+      GitHub Actions IPs reach the origin (proved by 404 on wrong endpoint).
+      /egob/catalogo/ file downloads should return 200 from GH Actions.
+      If blocked → set DATOS_MADRID_PROXY (CF Worker, 5 min, free).
     """
-    # ── Constants ─────────────────────────────────────────────────────────────
-    BASE        = "https://datos.madrid.es"
-    # Auto-discover the real download URL from the dataset landing page.
-    # datos.madrid changes the resource suffix (300193-0-, 300193-10-, 300193-11-, etc.)
-    # so we fetch the dataset page and scrape the actual CSV/ATOM href from it.
-    _DATASET_PAGE = f"{BASE}/portal/site/egob/menuitem.400a817358ce98c34e937436a8a409a0/?vgnextoid=300193&vgnextchannel=374512b9ace9f310VgnVCM100000171f5a0aRCRD"
-    _DATASET_PAGE_ALT = f"{BASE}/egob/catalogo/300193-0-licencias-urbanisticas"
+    BASE = "https://datos.madrid.es"
 
-    # Candidate URLs tried in order — first 200 wins
-    _CSV_CANDIDATES = [
-        f"{BASE}/egob/catalogo/300193-0-licencias-urbanisticas.csv",
+    # ── XLSX candidate URLs by year (tried newest→oldest) ────────────────────
+    # Resource IDs change each year — try all likely candidates
+    _current_year = date_to.year
+    _XLSX_CANDIDATES = [
+        # Current year first
+        f"{BASE}/egob/catalogo/300193-2-licencias-urbanisticas-xlsx.xlsx",  # 2026
+        f"{BASE}/egob/catalogo/300193-1-licencias-urbanisticas-xlsx.xlsx",  # 2025
+        f"{BASE}/egob/catalogo/300193-3-licencias-urbanisticas-xlsx.xlsx",  # 2027 alt
+        f"{BASE}/egob/catalogo/300193-0-licencias-urbanisticas-xlsx.xlsx",  # generic
+        # Also try CSV variants
         f"{BASE}/egob/catalogo/300193-10-licencias-urbanisticas.csv",
-        f"{BASE}/egob/catalogo/300193-11-licencias-urbanisticas.csv",
-        f"{BASE}/egob/catalogo/licencias-urbanisticas.csv",
+        f"{BASE}/egob/catalogo/300193-0-licencias-urbanisticas.csv",
     ]
-    _ATOM_CANDIDATES = [
-        f"{BASE}/egob/catalogo/300193-0-licencias-urbanisticas.atom",
-        f"{BASE}/egob/catalogo/300193-10-licencias-urbanisticas.atom",
-        f"{BASE}/egob/catalogo/300193-11-licencias-urbanisticas.atom",
-    ]
-    HTML_SEARCH = f"{BASE}/egob/catalogo/300193-0-licencias-urbanisticas"
+    if DATOS_MADRID_PROXY:
+        _PROXY_XLSX = [f"{DATOS_MADRID_PROXY}?url={quote(u, safe='')}"
+                       for u in _XLSX_CANDIDATES]
+    else:
+        _PROXY_XLSX = []
 
-    def _discover_download_urls():
-        """Fetch the dataset landing page and extract actual CSV/ATOM hrefs."""
-        discovered_csv  = None
-        discovered_atom = None
-        for page_url in [_DATASET_PAGE_ALT, _DATASET_PAGE, HTML_SEARCH]:
-            r, err = _fetch(page_url, accept="text/html,*/*", timeout=20)
-            if not r: continue
-            soup = BeautifulSoup(r.text, "html.parser")
-            for a in soup.find_all("a", href=True):
-                href = a["href"]
-                full = (f"{BASE}{href}" if href.startswith("/") else href)
-                if ".csv" in href.lower() and "licencias" in href.lower() and not discovered_csv:
-                    discovered_csv = full
-                if ".atom" in href.lower() and "licencias" in href.lower() and not discovered_atom:
-                    discovered_atom = full
-            if discovered_csv:
-                log(f"  🏛️ datos.madrid: found CSV href → {discovered_csv[-60:]}")
-                break
-        return discovered_csv, discovered_atom
+    # ── _fetch must be defined FIRST (before any nested function that uses it) ─
+    from dateutil import parser as _dp
 
-    # Try auto-discovery, then fall back to candidates
-    discovered_csv, discovered_atom = _discover_download_urls()
-    CSV_URL  = discovered_csv  or _CSV_CANDIDATES[0]
-    ATOM_URL = discovered_atom or _ATOM_CANDIDATES[0]
+    _dm_sess = requests.Session()
+    _dm_sess.verify = False
+    _dm_sess.headers.update({
+        "User-Agent":      ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/124.0.0.0 Safari/537.36"),
+        "Accept":          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+                           "text/csv,application/octet-stream,*/*",
+        "Accept-Language": "es-ES,es;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer":         f"{BASE}/dataset/300193-0-licencias-urbanisticas",
+        "Connection":      "keep-alive",
+    })
 
-    # Build candidate lists (discovered URL first)
-    _csv_urls_to_try = ([discovered_csv] if discovered_csv else []) + [
-        u for u in _CSV_CANDIDATES if u != discovered_csv
-    ]
-    _atom_urls_to_try = ([discovered_atom] if discovered_atom else []) + [
-        u for u in _ATOM_CANDIDATES if u != discovered_atom
-    ]
+    def _fetch(url, timeout=90, accept=None):
+        """Returns (response_or_None, error_string)."""
+        # Proxy path (if configured)
+        if DATOS_MADRID_PROXY and "egob/catalogo" in url:
+            proxy_url = f"{DATOS_MADRID_PROXY}?url={quote(url, safe='')}"
+            try:
+                r = requests.get(proxy_url, timeout=30, verify=False,
+                                 headers={"User-Agent":"PlanningScout/1.0",
+                                          "Accept":"*/*"})
+                if r.status_code == 200: return r, None
+                return None, f"proxy-{r.status_code}"
+            except Exception:
+                return None, "proxy-error"
+        # Direct path
+        if accept:
+            _dm_sess.headers["Accept"] = accept
+        try:
+            r = _dm_sess.get(url, timeout=timeout, allow_redirects=True)
+            if r.status_code == 200: return r, None
+            return None, f"http-{r.status_code}"
+        except requests.Timeout:
+            return None, "timeout"
+        except Exception as e:
+            return None, f"error-{type(e).__name__}"
 
-    # CF Worker proxy URL for this resource (if set)
-    PROXY_CSV   = (f"{DATOS_MADRID_PROXY}?url={quote(CSV_URL, safe='')}"
-                   if DATOS_MADRID_PROXY else None)
-    PROXY_ATOM  = (f"{DATOS_MADRID_PROXY}?url={quote(ATOM_URL, safe='')}"
-                   if DATOS_MADRID_PROXY else None)
-
-    # ── Fixed PEM parser ──────────────────────────────────────────────────────
+    # ── PEM parser (for CSV variant) ──────────────────────────────────────────
     def _parse_pem_es(raw):
         s = str(raw or "").strip()
         if not s or s in ("None","nan",""): return 0.0
@@ -5297,319 +5309,185 @@ def search_datos_madrid(date_from, date_to, global_seen):
             return float(s)
         except Exception:             return 0.0
 
-    from dateutil import parser as _dp
+    # ── HIGH-VALUE tipo types for lead scoring ────────────────────────────────
+    # Maps Tipo de expediente → profile hints + urgency
+    _TIPO_MAP = {
+        "Declaración Responsable - Primera Ocupación":  ("hospe+mep+actiu",  "primera_ocupacion", "⚡ ACTUAR ESTA SEMANA"),
+        "LICENCIA URBANÍSTICA DE ACTIVIDAD":            ("retail+hospe+mep",  "definitivo",        "📞 CONTACTAR EN 30 DÍAS"),
+        "Declaración Responsable Actividad":            ("retail+hospe+mep",  "solicitud",         "📅 MONITORIZAR"),
+        "Licencia de funcionamiento de actividad":      ("retail+hospe",      "definitivo",        "📞 CONTACTAR EN 30 DÍAS"),
+        "LICENCIA URBANÍSTICA RESIDENCIAL":             ("constructora+mep",  "definitivo",        "📞 CONTACTAR EN 30 DÍAS"),
+        "Declaración Responsable Residencial":          ("constructora+mep",  "solicitud",         "📅 MONITORIZAR"),
+        "Licencia básica urbanística actividad":        ("retail+hospe+mep",  "definitivo",        "📞 CONTACTAR EN 30 DÍAS"),
+        "Declaración Responsable Obras":                ("constructora+mep",  "solicitud",         "📅 MONITORIZAR"),
+    }
+    # Types with no commercial value
+    _SKIP_TIPOS = {"Consulta urbanística", "Declaración Responsable Ocupación Vía Pública",
+                   "Declaración Responsable Actividad - Migracion Platea"}
 
-    # ── Shared browser-fingerprinted session ──────────────────────────────────
-    _dm_sess = requests.Session()
-    _dm_sess.verify = False
-    _dm_sess.headers.update({
-        "User-Agent":               ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                                     "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                     "Chrome/124.0.0.0 Safari/537.36"),
-        "Accept":                   "text/html,application/xhtml+xml,*/*;q=0.8",
-        "Accept-Language":          "es-ES,es;q=0.9,en;q=0.8",
-        "Accept-Encoding":          "gzip, deflate, br",
-        "Referer":                  f"{BASE}/dataset/300193-0-licencias-urbanisticas",
-        "Sec-Fetch-Dest":           "document",
-        "Sec-Fetch-Mode":           "navigate",
-        "Sec-Fetch-Site":           "same-origin",
-        "Cache-Control":            "no-cache",
-        "Connection":               "keep-alive",
-        "Upgrade-Insecure-Requests":"1",
-    })
-
-    # ── Generic fetch helper ──────────────────────────────────────────────────
-    def _fetch(url, accept="text/csv,text/plain,*/*", timeout=60):
-        """Returns (response, error_str). Tries proxy first if configured."""
-        # Proxy path
-        if DATOS_MADRID_PROXY and "egob/catalogo" in url:
-            proxy_url = f"{DATOS_MADRID_PROXY}?url={quote(url, safe='')}"
-            try:
-                r = requests.get(proxy_url, timeout=30, verify=False,
-                                 headers={"User-Agent":"PlanningScout/1.0",
-                                          "Accept": accept})
-                if r.status_code == 200: return r, None
-                return None, f"proxy-{r.status_code}"
-            except Exception as e:
-                return None, f"proxy-error"
-
-        # Direct path
-        s = _dm_sess
-        s.headers["Accept"] = accept
-        try:
-            r = s.get(url, timeout=timeout, allow_redirects=True)
-            if r.status_code == 200: return r, None
-            return None, f"http-{r.status_code}"
-        except requests.Timeout:
-            return None, "timeout"
-        except Exception as e:
-            return None, f"error-{type(e).__name__}"
-
-    # ── Keyword filter ────────────────────────────────────────────────────────
-    DATOS_KEYWORDS = [
-        # (search_term, profile_hint) — matched against OBJETO + DESCRIPCION
-        ("cambio de uso",              "hospe+mep+retail"),
-        ("cambio de destino",          "hospe+mep+retail"),
-        ("modificación de uso",        "hospe+mep+retail"),
-        ("primera ocupación",          "hospe+mep"),
-        ("obra mayor",                 "constructora+mep+alquiler+materiales"),
-        ("nueva construcción",         "constructora+mep+alquiler+materiales"),
-        ("nueva planta",               "constructora+mep+alquiler+materiales"),
-        ("rehabilitación",             "hospe+mep+materiales"),
-        ("reforma integral",           "hospe+mep+materiales"),
-        ("gran rehabilitación",        "hospe+mep+materiales"),
-        ("declaración responsable",    "mep+constructora"),
-        ("oficinas",                   "actiu+mep"),
-        ("hotel",                      "actiu+mep+hospe"),
-        ("coworking",                  "actiu+mep"),
-        ("residencia de estudiantes",  "actiu+con+mep"),
-        ("local comercial",            "retail+mep"),
-        ("nave industrial",            "industrial+alquiler+materiales"),
-        ("almacén",                    "industrial+materiales"),
-    ]
-    KW_SET   = {kw for kw,_ in DATOS_KEYWORDS}
-    KW_MAP   = {kw: hint for kw,hint in DATOS_KEYWORDS}
-
-    # ── Noise filter ──────────────────────────────────────────────────────────
-    _DM_NOISE = [
-        "cambio de escaparate", "cambio de rótulo", "instalación de rótulo",
-        "velador", "terraza desmontable", "antena de telefonía",
-        "cata de terreno", "ensayo geotécnico",
-    ]
-
-    # ── Record filter + append ────────────────────────────────────────────────
+    # ── Result builder ────────────────────────────────────────────────────────
     results  = []
     seen_exp = set()
 
-    def _process_record(rec: dict):
-        """Accept/reject one licence record. Appends to results if good."""
-        exp = str(rec.get("EXPEDIENTE","") or "").strip()
-        if not exp or exp in seen_exp: return
+    def _process_xlsx_row(row_dict: dict, row_idx: int):
+        """Process one row from the XLSX. Appends to results if lead-worthy."""
+        tipo = str(row_dict.get("Tipo de expediente","") or "").strip()
+        if tipo in _SKIP_TIPOS or not tipo:
+            return
 
-        # Date filter
-        fecha = (str(rec.get("FECHA_OTORGAMIENTO","") or "")
-                 or str(rec.get("FECHA_SOLICITUD","")  or "")).strip()
-        if fecha:
+        profile_hint, phase, action_window = _TIPO_MAP.get(
+            tipo, ("constructora+mep", "solicitud", "📅 MONITORIZAR"))
+
+        # Date filter — Fecha concesión
+        fecha_raw = str(row_dict.get("Fecha concesión","") or "").strip()
+        if fecha_raw:
             try:
-                rec_date = _dp.parse(fecha[:10]).date()
+                rec_date = _dp.parse(fecha_raw[:10], dayfirst=True).date()
                 if rec_date < date_from.date() or rec_date > date_to.date():
                     return
             except Exception:
-                pass   # keep if parse fails
+                pass
 
-        # Status filter
-        resultado = str(rec.get("RESULTADO","") or "").strip().lower()
-        if resultado in ("inadmitida","desistida","caducada","denegada","archivada"):
-            return
+        # Build address
+        tipo_via = str(row_dict.get("Tipo Via","")     or "").strip()
+        nombre   = str(row_dict.get("Nombre Via","")   or "").strip()
+        numero   = str(row_dict.get("Número","")       or "").strip()
+        try:
+            numero = str(int(float(numero))) if numero and numero != "nan" else ""
+        except Exception:
+            numero = ""
+        dist     = str(row_dict.get("Descripción Distrito","") or "").strip()
+        barrio   = str(row_dict.get("Descripción Barrio","")   or "").strip()
+        addr     = " ".join(filter(None, [tipo_via, nombre, numero])).strip()
+        if dist:  addr += f", {dist}"
+        if barrio and barrio != dist: addr += f" ({barrio})"
 
-        obj      = str(rec.get("OBJETO","")      or "").lower()
-        desc_l   = str(rec.get("DESCRIPCION","") or "").lower()
-        barrio   = str(rec.get("BARRIO","")      or "").lower()
-        combined = f"{obj} {desc_l} {barrio}"
+        if not addr or addr.strip() in (",",""):
+            return   # skip rows with no address
 
-        # Keyword match
-        matched_hint = ""
-        for kw, hint in DATOS_KEYWORDS:
-            if kw in combined:
-                matched_hint = hint
-                break
-        if not matched_hint: return
+        # Build unique ID (no EXPEDIENTE in this dataset)
+        exp = f"DM-{_current_year}-{row_idx}"
 
-        # Exclusion + noise
-        if any(exc in combined for exc in KEYWORDS_EXCLUDE): return
-        if any(n   in combined for n   in _DM_NOISE):        return
-
-        # PEM filter
-        pem_val = _parse_pem_es(rec.get("PEM"))
-        if 0 < pem_val < 30_000: return
-
+        if exp in seen_exp: return
         seen_exp.add(exp)
-        addr       = str(rec.get("DIRECCION","") or "").strip()
-        dist       = str(rec.get("DISTRITO","")  or "").strip()
-        barrio_raw = str(rec.get("BARRIO","")    or "").strip()
-        if dist and barrio_raw: addr = f"{addr}, {barrio_raw} ({dist})"
-        elif dist:              addr = f"{addr} ({dist})"
 
-        exp_enc    = exp.replace("/","%2F").replace(" ","%20")
-        source_url = (f"https://sede.madrid.es/portal/site/tramites/"
-                      f"menuitem.62876cb64654a55e2dbd7003a8a409a0/"
-                      f"?expediente={exp_enc}")
-        results.append((exp, rec, source_url, matched_hint))
+        # Build source URL — link to CONEX public search for this address
+        q = f"{nombre}+{numero}+Madrid".replace(" ","+")
+        source_url = (f"https://sede.madrid.es/portal/site/tramites/menuitem"
+                      f".62876cb64654a55e2dbd7003a8a409a0/?vgnextoid=fa3a74&q={q}")
+
+        # Applicant
+        interesado = str(row_dict.get("Interesado","") or "").strip()
+        # "Persona jurídica" = company; skip "Persona física" for commercial leads
+        is_company = interesado == "Persona jurídica"
+        if not is_company and tipo not in (
+                "Declaración Responsable - Primera Ocupación",
+                "LICENCIA URBANÍSTICA DE ACTIVIDAD",
+                "Licencia de funcionamiento de actividad"):
+            return   # skip physical persons unless high-value type
+
+        proc = str(row_dict.get("Procedimiento","") or "").strip()
+        desc = f"{tipo} | {proc} | {dist} {barrio}"
+
+        rec = {
+            "TIPO_EXPEDIENTE":  tipo,
+            "PROCEDIMIENTO":    proc,
+            "OBJETO":           tipo,
+            "DESCRIPCION":      desc,
+            "DIRECCION":        addr,
+            "BARRIO":           barrio,
+            "DISTRITO":         dist,
+            "FECHA_OTORGAMIENTO": fecha_raw,
+            "RESULTADO":        "Otorgada",
+            "PEM":              None,
+            "EXPEDIENTE":       exp,
+            "INTERESADO":       interesado,
+        }
+        results.append((exp, rec, source_url, profile_hint, action_window, phase))
 
     # ══════════════════════════════════════════════════════════════════════════
-    # TIER 1 + 2: Try CSV download — try all candidate URLs until one works
+    # DOWNLOAD XLSX (primary) or CSV (fallback)
     # ══════════════════════════════════════════════════════════════════════════
-    if time_ok(need_s=60):
-        r_csv = None; err_csv = "no_candidates"
-        for _csv_try in _csv_urls_to_try:
-            log(f"  🏛️ datos.madrid: CSV → {_csv_try[-70:]}")
-            r_csv, err_csv = _fetch(_csv_try,
-                                    accept="text/csv,application/octet-stream,*/*",
-                                    timeout=90)
-            if r_csv and len(r_csv.content) > 1000:
-                log(f"  🏛️ datos.madrid: CSV received ({len(r_csv.content)//1024}KB)")
-                break
-            log(f"  ⚠️ datos.madrid CSV [{_csv_try[-40:]}]: {err_csv}")
+    _current_year = date_to.year
+    _r_data = None
+    _used_url = None
+    _err_last = "not tried"
 
-        if r_csv and len(r_csv.content) > 1000:
-            log(f"  🏛️ datos.madrid: CSV received ({len(r_csv.content)//1024}KB) — parsing")
-            try:
-                import csv as _csv, io as _io
-                # Detect encoding
-                raw = r_csv.content
-                enc = "utf-8-sig"
-                for _enc in ("utf-8-sig","utf-8","latin-1","cp1252","iso-8859-1"):
-                    try: raw.decode(_enc); enc = _enc; break
-                    except: pass
+    log(f"  🏛️ datos.madrid: downloading {_current_year} XLSX...")
 
-                text    = raw.decode(enc, errors="replace")
-                reader  = _csv.DictReader(_io.StringIO(text), delimiter=";")
-                # Normalise header names (strip spaces, uppercase)
-                _rows_scanned = 0
-                for row in reader:
-                    # Normalise keys to uppercase stripped
-                    rec_norm = {k.strip().upper(): v.strip() for k,v in row.items()}
-                    # Map common alternate column names
-                    for _alias, _canon in [
-                        ("DESCRIPCION_OBRA","DESCRIPCION"),
-                        ("TIPO_LICENCIA","CLASE_LICENCIA"),
-                        ("TIPO","OBJETO"),
-                        ("FECHA_CONCESION","FECHA_OTORGAMIENTO"),
-                        ("IMPORTE","PEM"),
-                        ("NUMERO_EXPEDIENTE","EXPEDIENTE"),
-                        ("IMPORTE_OBRA","PEM"),
-                    ]:
-                        if _alias in rec_norm and _canon not in rec_norm:
-                            rec_norm[_canon] = rec_norm[_alias]
-                    _process_record(rec_norm)
-                    _rows_scanned += 1
-                log(f"  🏛️ datos.madrid: scanned {_rows_scanned} rows → {len(results)} hits")
-            except Exception as e:
-                log(f"  ⚠️ datos.madrid CSV parse error: {e}")
+    for url in _XLSX_CANDIDATES:
+        if not time_ok(need_s=30): break
+        _r_data, _err_last = _fetch(url, timeout=90)
+        if _r_data:
+            _used_url = url
+            log(f"  🏛️ datos.madrid: ✅ {url.split('/')[-1]} ({len(_r_data.content)//1024}KB)")
+            break
+        log(f"  ⚠️ datos.madrid [{url.split('/')[-1]}]: {_err_last}")
+
+    if not _r_data:
+        if "403" in str(_err_last):
+            log(f"  ❌ datos.madrid: WAF/IP block (HTTP 403).")
+            log(f"     Fix: deploy Cloudflare Worker proxy → set DATOS_MADRID_PROXY secret")
+            log(f"     Setup JS snippet: see DATOS_MADRID_PROXY constant in engine source")
         else:
-            log(f"  ⚠️ datos.madrid CSV: {err_csv} — trying ATOM feed")
+            log(f"  ⚠️ datos.madrid: all download attempts failed ({_err_last})")
+            log(f"     If this persists, set DATOS_MADRID_PROXY secret for reliable access")
+        return []
 
-            # ══════════════════════════════════════════════════════════════════
-            # TIER 3: ATOM feed — try all candidates
-            # ══════════════════════════════════════════════════════════════════
-            r_atom = None; err_atom = "no_candidates"
-            for _atom_try in _atom_urls_to_try:
-                log(f"  🏛️ datos.madrid: ATOM → {_atom_try[-70:]}")
-                r_atom, err_atom = _fetch(_atom_try,
-                                          accept="application/atom+xml,application/xml,*/*",
-                                          timeout=60)
-                if r_atom and len(r_atom.content) > 500:
-                    log(f"  🏛️ datos.madrid: ATOM received ({len(r_atom.content)//1024}KB)")
-                    break
-                log(f"  ⚠️ datos.madrid ATOM [{_atom_try[-40:]}]: {err_atom}")
-            if r_atom and len(r_atom.content) > 500:
-                log(f"  🏛️ datos.madrid: ATOM received ({len(r_atom.content)//1024}KB)")
-                try:
-                    from xml.etree import ElementTree as _ET
-                    root = _ET.fromstring(r_atom.content)
-                    _NS  = {"a":"http://www.w3.org/2005/Atom",
-                            "dc":"http://purl.org/dc/elements/1.1/"}
-                    entries = (root.findall(".//a:entry", _NS)
-                               or root.findall(".//entry"))
-                    for entry in entries:
-                        def _t(tag):
-                            for ns in ["a:",""]:
-                                el = entry.find(f"{ns}{tag}", _NS) if ns=="a:" else entry.find(tag)
-                                if el is not None and el.text: return el.text.strip()
-                            return ""
-                        # Parse content/summary as key:value pairs
-                        content_raw = _t("content") or _t("summary") or ""
-                        rec_atom: dict = {}
-                        for line in content_raw.replace("<br/>","\n").split("\n"):
-                            if ":" in line:
-                                k, _, v = line.partition(":")
-                                rec_atom[k.strip().upper()] = v.strip()
-                        # Fill from standard ATOM fields
-                        if not rec_atom.get("EXPEDIENTE"):
-                            id_el = entry.find("a:id",_NS) or entry.find("id")
-                            if id_el is not None and id_el.text:
-                                # Extract expediente from URL or id
-                                m_exp = re.search(r'expediente=([^&"]+)', id_el.text)
-                                if m_exp: rec_atom["EXPEDIENTE"] = m_exp.group(1)
-                        # Use ATOM updated/published as date
-                        for tag in ["updated","published"]:
-                            dt_el = entry.find(f"a:{tag}",_NS) or entry.find(tag)
-                            if dt_el is not None and dt_el.text:
-                                if not rec_atom.get("FECHA_OTORGAMIENTO"):
-                                    rec_atom["FECHA_OTORGAMIENTO"] = dt_el.text[:10]
-                                break
-                        # Title as OBJETO if missing
-                        if not rec_atom.get("OBJETO"):
-                            rec_atom["OBJETO"] = _t("title")
-                        _process_record(rec_atom)
-                    log(f"  🏛️ datos.madrid ATOM: {len(entries)} entries → {len(results)} hits")
-                except Exception as e:
-                    log(f"  ⚠️ datos.madrid ATOM parse error: {e}")
-            else:
-                log(f"  ⚠️ datos.madrid ATOM: {err_atom}")
+    # ── Parse XLSX ────────────────────────────────────────────────────────────
+    if _used_url and _used_url.endswith(".xlsx"):
+        try:
+            import io as _io
+            import openpyxl as _opx
+            wb = _opx.load_workbook(_io.BytesIO(_r_data.content), data_only=True)
+            ws = wb.active
+            headers = [str(cell.value or "").strip() for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+            row_idx = 0
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                row_dict = dict(zip(headers, row))
+                _process_xlsx_row(row_dict, row_idx)
+                row_idx += 1
+            log(f"  🏛️ datos.madrid XLSX: {row_idx} rows scanned → {len(results)} leads")
+        except Exception as e:
+            log(f"  ⚠️ datos.madrid XLSX parse error: {e}")
 
-                # ════════════════════════════════════════════════════════════
-                # TIER 4: HTML search scraping
-                # ════════════════════════════════════════════════════════════
-                log(f"  🌐 datos.madrid: trying HTML search scrape...")
-                _scraped = 0
-                for kw_raw, _hint in DATOS_KEYWORDS[:8]:   # top 8 by value
-                    if not time_ok(need_s=20): break
-                    html_url = (f"{BASE}/dataset/?q={quote(kw_raw)}"
-                                f"&sort=issued+desc&rows=50")
-                    r_html, _ = _fetch(html_url, accept="text/html,*/*", timeout=30)
-                    if not r_html: continue
-                    soup = BeautifulSoup(r_html.text, "html.parser")
-                    # Each result card has class "dataset-item" or similar
-                    cards = (soup.select(".dataset-item") or
-                             soup.select("[data-search-item]") or
-                             soup.select("article.package-item") or
-                             soup.select(".module-resource"))
-                    for card in cards:
-                        title_el = (card.select_one("h3 a") or
-                                    card.select_one(".heading a") or
-                                    card.select_one("a[href*='dataset']"))
-                        if not title_el: continue
-                        title_txt = title_el.get_text(strip=True)
-                        href      = title_el.get("href","")
-                        full_href = (f"{BASE}{href}" if href.startswith("/") else href)
-                        if not any(kw in title_txt.lower() for kw in KW_SET): continue
-                        # Build minimal rec from card text
-                        desc_el = card.select_one(".notes") or card.select_one("p")
-                        desc_txt = desc_el.get_text(strip=True) if desc_el else ""
-                        rec_html = {
-                            "OBJETO":      title_txt,
-                            "DESCRIPCION": desc_txt,
-                            "EXPEDIENTE":  re.sub(r"[^A-Za-z0-9/\-]","",
-                                                   title_txt[:30].replace(" ","-")),
-                        }
-                        _process_record(rec_html)
-                    _scraped += len(cards)
-                    time.sleep(0.5)
+    # ── Parse CSV (fallback) ──────────────────────────────────────────────────
+    elif _used_url and _used_url.endswith(".csv"):
+        try:
+            import csv as _csv, io as _io
+            raw = _r_data.content
+            enc = "utf-8-sig"
+            for _enc in ("utf-8-sig","utf-8","latin-1","cp1252"):
+                try: raw.decode(_enc); enc = _enc; break
+                except: pass
+            text   = raw.decode(enc, errors="replace")
+            reader = _csv.DictReader(_io.StringIO(text), delimiter=";")
+            row_idx = 0
+            for row in reader:
+                rec_norm = {k.strip(): v.strip() for k,v in row.items()}
+                # Map CSV columns to XLSX-compatible names
+                for _alias, _canon in [
+                    ("TIPO_EXPEDIENTE","Tipo de expediente"),
+                    ("PROCEDIMIENTO","Procedimiento"),
+                    ("NOMBRE_VIA","Nombre Via"), ("TIPO_VIA","Tipo Via"),
+                    ("NUM","Número"), ("DISTRITO_DESC","Descripción Distrito"),
+                    ("BARRIO_DESC","Descripción Barrio"),
+                    ("FECHA_CONCESION","Fecha concesión"),
+                    ("INTERESADO","Interesado"),
+                ]:
+                    if _alias in rec_norm and _canon not in rec_norm:
+                        rec_norm[_canon] = rec_norm[_alias]
+                _process_xlsx_row(rec_norm, row_idx)
+                row_idx += 1
+            log(f"  🏛️ datos.madrid CSV: {row_idx} rows scanned → {len(results)} leads")
+        except Exception as e:
+            log(f"  ⚠️ datos.madrid CSV parse error: {e}")
 
-                if _scraped:
-                    log(f"  🌐 datos.madrid HTML: {_scraped} cards scraped → {len(results)} hits")
-                else:
-                    # All tiers failed — diagnose precisely
-                    all_errors = f"csv={err_csv}, atom={err_atom}"
-                    if "403" in all_errors or "429" in all_errors:
-                        log(f"  ❌ datos.madrid: IP/WAF block — set DATOS_MADRID_PROXY (Cloudflare Worker)")
-                        log(f"     Setup: workers.cloudflare.com → free → see engine source lines 80-93")
-                    elif "404" in all_errors:
-                        log(f"  ❌ datos.madrid: HTTP 404 — URL path changed on their server.")
-                        log(f"     Auto-discovery tried but found no valid link.")
-                        log(f"     ACTION: go to https://datos.madrid.es and search 'licencias urbanisticas'")
-                        log(f"     Find the CSV download link and update _CSV_CANDIDATES in engine source.")
-                    elif "timeout" in all_errors:
-                        log(f"  ⚠️ datos.madrid: timeout — server slow. Set DATOS_MADRID_PROXY for reliability.")
-                    else:
-                        log(f"  ⚠️ datos.madrid: all tiers failed ({all_errors})")
-
-    log(f"  🏛️ datos.madrid: {len(results)} licencias total")
+    log(f"  🏛️ datos.madrid: {len(results)} licencias total for {date_from.date()}→{date_to.date()}")
     return results
 
 
-def process_datos_madrid_item(exp, rec, source_url, profile_hint, idx, total):
+def process_datos_madrid_item(exp, rec, source_url, profile_hint, action_window_hint="", phase_hint="", idx=0, total=0):
     """
     Convert a datos.madrid.es licence record into a PlanningScout permit dict
     and write it to the sheet.
@@ -5624,14 +5502,17 @@ def process_datos_madrid_item(exp, rec, source_url, profile_hint, idx, total):
             if source_url in _seen_urls:
                 return 0, 1, 0
 
-        obj    = str(rec.get("OBJETO", "") or "").strip()
+        obj    = str(rec.get("OBJETO", "") or rec.get("TIPO_EXPEDIENTE","") or "").strip()
         desc   = str(rec.get("DESCRIPCION", "") or "").strip()
         addr   = str(rec.get("DIRECCION", "") or "").strip()
         barrio = str(rec.get("BARRIO", "") or "").strip()
         dist   = str(rec.get("DISTRITO", "") or "").strip()
-        fecha  = str(rec.get("FECHA_OTORGAMIENTO", "") or "").strip()[:10]
-        clase  = str(rec.get("CLASE_LICENCIA", "") or "").strip()
-        result = str(rec.get("RESULTADO", "") or "").strip()
+        fecha  = str(rec.get("FECHA_OTORGAMIENTO", "") or rec.get("Fecha concesión","") or "").strip()[:10]
+        clase  = str(rec.get("CLASE_LICENCIA", "") or rec.get("Tipo de expediente","") or "").strip()
+        result = str(rec.get("RESULTADO", "") or "Otorgada").strip()
+        # Override phase/action_window from XLSX data if provided
+        if action_window_hint: p_override_aw = action_window_hint
+        if phase_hint:         p_override_ph = phase_hint
 
         # PEM extraction
         pem_val = 0.0
