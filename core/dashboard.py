@@ -472,6 +472,17 @@ footer { visibility: hidden !important; }
     color: #1e3a5f !important;
 }
 
+/* Watchlist / follow button — small, subtle, attached to card */
+button[kind="secondary"]:has(> div > p:contains("🔖")) {
+    font-size: 11px !important;
+    padding: 4px 10px !important;
+    background: #f8fafc !important;
+    color: #64748b !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 0 0 8px 8px !important;
+    margin-top: -2px !important;
+}
+
 /* Mobile */
 @media (max-width: 768px) {
     .block-container {
@@ -613,7 +624,8 @@ PROFILES = {
         "tip": "💡 <strong>Una urbanización aprobada = nuevo barrio en 2-3 años.</strong> Identifica la ubicación de tu próxima apertura antes de que suba el precio del suelo.",
         "min_score": 0, "min_value": 0, "days": 365,
         "types": ["urbanización", "plan especial", "plan especial / parcial", "plan parcial",
-                  "cambio de uso", "licencia de actividad", "obra mayor nueva construcción"],
+                  "cambio de uso", "licencia de actividad", "obra mayor nueva construcción",
+                  "licitación de obras"],
     },
     "📐 Promotores / RE": {
         "key": "promotores",
@@ -627,13 +639,14 @@ PROFILES = {
         "tip": "💡 <strong>Aprobación definitiva = licitación en 12-18 meses.</strong> Prepara el dossier técnico y las alianzas antes que la competencia.",
         "min_score": 35, "min_value": 0, "days": 365,
         "types": ["urbanización", "plan especial", "plan especial / parcial", "plan parcial",
-                  "obra mayor industrial", "obra mayor nueva construcción", "licitación de obras"],
+                  "obra mayor industrial", "obra mayor nueva construcción", "licitación de obras",
+                  "contribuciones especiales", "demolición y nueva planta"],
     },
     "🏗️ Gran Infraestructura": {
         "key": "infrastructura",
         "tip": "💡 <strong>Las Tablas Oeste €106M, Los Cerros, Tres Cantos UE.5 €17M.</strong> Anticipación de 12-18 meses antes de licitación. Las Juntas de Compensación activas son tu señal.",
         "min_score": 40, "min_value": 0, "days": 365,
-        "types": ["urbanización", "plan especial / parcial", "plan parcial", "licitación de obras"],
+        "types": ["urbanización", "plan especial", "plan especial / parcial", "plan parcial", "licitación de obras", "contribuciones especiales"],
     },
     "🏭 Industrial / Log.": {
         "key": "industrial",
@@ -646,14 +659,35 @@ PROFILES = {
         "key": "alquiler",
         "tip": "💡 <strong>Llega al constructor ANTES de que empiece la obra.</strong> Cualquier proyecto >€200K = excavadoras, plataformas elevadoras, robots de demolición.",
         "min_score": 0, "min_value": 200_000, "days": 60,
-        "types": [],
-        "action_filter": "ACTUAR",  # Only show ⚡ ACTUAR ESTA SEMANA leads
+        "types": ["urbanización", "obra mayor nueva construcción", "obra mayor industrial",
+                  "licitación de obras", "demolición y nueva planta", "obra mayor rehabilitación",
+                  "declaración responsable", "plan especial / parcial", "plan especial",
+                  "contribuciones especiales"],
+        # Any obra = machinery needed. No action_filter — don't depend on AI field being populated.
     },
+    
     "🛒 Compras / Materiales": {
         "key": "compras",
         "tip": "💡 <strong>Todos los proyectos grandes = oportunidad de suministro.</strong> Preséntate antes de que la constructora adjudique materiales.",
         "min_score": 0, "min_value": 150_000, "days": 365,
         "types": [],
+    },
+    "💼 Contract & Oficinas": {
+        "key": "actiu",
+        "tip": "💡 <strong>Cada edificio de oficinas o hotel = oportunidad de venta.</strong> Contacta al promotor en fase de proyecto básico — antes de que cierre el contrato de mobiliario y equipamiento.",
+        "min_score": 0, "min_value": 200_000, "days": 365,
+        "types": ["obra mayor nueva construcción", "obra mayor rehabilitación",
+                  "cambio de uso", "declaración responsable", "licencia primera ocupación",
+                  "urbanización"],
+        "profile_fit_filter": "actiu",   # also filter by profile_fit column
+    },
+    "🏠 Flexliving & Hosteleria": {
+        "key": "hospe",
+        "tip": "💡 <strong>Cambio de uso = tu señal más valiosa.</strong> Primera ocupación = llama al promotor HOY. El edificio está terminado y necesita un operador antes de comercializarlo.",
+        "min_score": 0, "min_value": 0, "days": 365,
+        "types": ["cambio de uso", "licencia primera ocupación", "declaración responsable",
+                  "obra mayor rehabilitación", "obra mayor nueva construcción"],
+        "profile_fit_filter": "hospe",
     },
     "🏙️ Vista General": {
         "key": "general",
@@ -1307,9 +1341,24 @@ def build_map(df_map, profile_key="general"):
 
     # Filter to leads with mappable locations
     rows_with_loc = []
-    with st.spinner("Geolocalizando proyectos…"):
+    with st.spinner("Cargando mapa…"):
         for _, row in df_map.iterrows():
-            lat, lon, prec = _get_coords(row.to_dict())
+            r = row.to_dict()
+            # Fast path: skip Nominatim if we can get municipality centroid directly.
+            # This makes map load in <2s instead of 30s+ for 50 rows.
+            maps_url = str(r.get("maps", "") or "").strip()
+            lat, lon = _extract_coords_from_maps_url(maps_url)
+            if lat:
+                rows_with_loc.append((row, lat, lon, "exact"))
+                continue
+            # Municipality centroid — instant
+            muni_key = str(r.get("municipio", "") or "Madrid").lower().strip()
+            if muni_key in _MUNI_CENTROIDS:
+                lat, lon = _MUNI_CENTROIDS[muni_key]
+                rows_with_loc.append((row, lat, lon, "municipality"))
+                continue
+            # Only fall back to Nominatim as last resort
+            lat, lon, prec = _get_coords(r)
             rows_with_loc.append((row, lat, lon, prec))
 
     if not rows_with_loc:
@@ -1789,6 +1838,20 @@ if prof["types"] and "tipo" in df_f.columns:
     pat  = "|".join(re.escape(t) for t in prof["types"])
     df_f = df_f[df_f["tipo"].str.contains(pat, case=False, na=False)]
 
+# ── NEW: Profile Fit Filter (Secondary filter for overlapping profiles) ──
+_pff = prof.get("profile_fit_filter", "")
+if _pff and "profile_fit" in df_f.columns:
+    # Use astype(str) to prevent crashes on empty/NaN cells
+    _pff_mask = df_f["profile_fit"].astype(str).str.lower().str.contains(_pff.lower(), na=False)
+    # Only apply if it would keep at least 3 rows — otherwise show everything
+    if _pff_mask.sum() >= 3:
+        df_f = df_f[_pff_mask]
+
+# Action window filter — Alquiler Maquinaria only shows urgent leads
+if prof.get("action_filter") and "action_window" in df_f.columns:
+    _aw_pat = prof["action_filter"]
+    df_f = df_f[df_f["action_window"].astype(str).str.contains(_aw_pat, na=False) | (df_f["action_window"].astype(str) == "")]
+
 # Action window filter — Alquiler Maquinaria only shows urgent leads
 if prof.get("action_filter") and "action_window" in df_f.columns:
     _aw_pat = prof["action_filter"]
@@ -1819,8 +1882,33 @@ if kw_search:
                 re.escape(kw_search), na=False)
     df_f = df_f[_mask]
 
-df_f = df_f.sort_values(["score", "pem_combined"], ascending=[False, False]).reset_index(drop=True)
+# Deduplicate by expediente — when the same project has multiple phases,
+# keep only the most advanced/recent entry. Show all as "historial" on the card.
+if "expediente" in df_f.columns:
+    _exp_col = df_f["expediente"].astype(str).str.strip()
+    _has_exp = (_exp_col != "") & (_exp_col != "nan") & (_exp_col != "None")
 
+    # Phase priority — higher = more advanced = shown first
+    _PHASE_PRIORITY = {
+        "en_obra": 7, "adjudicacion": 6, "primera_ocupacion": 5,
+        "definitivo": 4, "licitacion": 3, "en_tramite": 2, "inicial": 1, "solicitud": 0,
+    }
+    if "fase" in df_f.columns:
+        df_f["_phase_priority"] = df_f["fase"].map(_PHASE_PRIORITY).fillna(2)
+    else:
+        df_f["_phase_priority"] = 2
+
+    df_f = df_f.sort_values(
+        ["_phase_priority", "score", "pem_combined"],
+        ascending=[False, False, False]
+    )
+    # For rows with a real expediente, keep only the most advanced phase
+    # (the sort above ensures the first occurrence is the most advanced)
+    _dupes_mask = _has_exp & df_f.duplicated(subset=["expediente"], keep="first")
+    df_dup_history = df_f[_dupes_mask].copy()   # save for potential "historial" display
+    df_f = df_f[~_dupes_mask].reset_index(drop=True)
+else:
+    df_f = df_f.sort_values(["score", "pem_combined"], ascending=[False, False]).reset_index(drop=True)
 # ── Metrics ──
 total_pem  = df_f["pem_combined"].sum()
 count      = len(df_f)
@@ -1881,7 +1969,11 @@ st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 # ════════════════════════════════════════════════════════════
 # TABS — Lista de leads  |  Mapa interactivo
 # ════════════════════════════════════════════════════════════
-_tab_leads, _tab_mapa = st.tabs(["📋  Lista de proyectos", "🗺️  Mapa interactivo"])
+_tab_leads, _tab_mapa, _tab_alertas = st.tabs([
+    "📋  Lista de proyectos",
+    "🗺️  Mapa interactivo",
+    "🔖  Mis alertas",
+])
 
 # ── TAB 1: LEADS LIST ────────────────────────────────────────
 with _tab_leads:
@@ -1911,31 +2003,41 @@ with _tab_leads:
             f'</div>',
             unsafe_allow_html=True
         )
+        # Load watchlist once before the loop (not inside — avoid 1 Sheets call per card)
+        _u = st.session_state.get("user_email", "")
+        _watched_set = set(load_watchlist(_u)) if (_u and not _u.startswith("token:")) else set()
+
         for _, row in df_f.iterrows():
+            _exp = str(row.get("expediente", "") or "").strip()
+            _already = _exp in _watched_set if _exp else False
+
             st.markdown(build_card(row.to_dict()), unsafe_allow_html=True)
 
-            # ── Watchlist save button ──────────────────────────────────────────
-            _exp = str(row.get("expediente", "") or "").strip()
-            _u   = st.session_state.get("user_email", "")
-            # Only show for logged-in email users (not admin token) with an expediente
+            # ── Compact watchlist button — inline with card footer ─────────────
             if _exp and _u and not _u.startswith("token:"):
-                _watched = load_watchlist(_u)
-                _already = _exp in _watched
-                _btn_label = "✅ Siguiendo" if _already else "🔔 Guardar alerta"
-                _col1, _col2 = st.columns([1, 8])
-                with _col1:
+                _btn_lbl = "🔖 Siguiendo" if _already else "🔖 Seguir"
+                _btn_help = "Ya recibirás alertas cuando este proyecto avance." if _already else "Recibe un email cuando este proyecto avance de fase."
+                # Use negative top margin to visually attach to card bottom
+                st.markdown(
+                    "<div style='margin-top:-14px;margin-bottom:8px;'>",
+                    unsafe_allow_html=True
+                )
+                _bcol, _ = st.columns([1, 6])
+                with _bcol:
                     if st.button(
-                        _btn_label,
+                        _btn_lbl,
                         key=f"watch_{_exp}_{row.get('bocm_url','')}",
                         disabled=_already,
-                        help=("Recibirás un email cuando este proyecto avance de fase."
-                              if not _already else "Ya recibirás alertas sobre este proyecto."),
+                        help=_btn_help,
+                        use_container_width=False,
                     ):
                         if add_to_watchlist(_u, row.to_dict()):
-                            st.toast(f"✅ Alerta guardada para expediente {_exp}")
+                            _watched_set.add(_exp)
+                            st.toast(f"🔖 Siguiendo expediente {_exp}")
                             load_watchlist.clear()
                         else:
-                            st.toast("❌ Error guardando alerta. Inténtalo de nuevo.")
+                            st.toast("❌ Error. Inténtalo de nuevo.")
+                st.markdown("</div>", unsafe_allow_html=True)
 
 # ── TAB 2: INTERACTIVE MAP ───────────────────────────────────
 with _tab_mapa:
@@ -1958,9 +2060,13 @@ with _tab_mapa:
 </div>""", unsafe_allow_html=True)
 
         # Map size control — Expansion directors want a large overview
-        _map_rows = min(len(df_f), 200)   # cap at 200 pins for performance
+        # Cap at 50 pins — Nominatim geocoding is ~0.3s/row.
+        # 50 pins = ~15s max. 200 pins = >60s = user gives up.
+        # Show highest-scored leads first (already sorted).
+        _map_rows = min(len(df_f), 50)
         df_map = df_f.head(_map_rows)
-
+        if len(df_f) > _map_rows:
+            st.caption(f"ℹ️ Mapa muestra los {_map_rows} proyectos con mayor puntuación. Usa filtros para ver zonas concretas.")
         result = build_map(df_map, profile_key=prof["key"])
         if result:
             folium_map, n_plotted = result
@@ -1982,6 +2088,51 @@ with _tab_mapa:
             )
         else:
             st.info("No se pudo generar el mapa. Comprueba la conexión.")
+
+# ── TAB 3: MIS ALERTAS ───────────────────────────────────────
+with _tab_alertas:
+    _ua = st.session_state.get("user_email", "")
+    if not _ua or _ua.startswith("token:"):
+        st.info("Inicia sesión con tu email para ver y gestionar tus alertas guardadas.")
+    else:
+        _wl = load_watchlist(_ua)
+        if not _wl:
+            st.markdown("""
+            <div style="text-align:center;padding:56px 24px;background:#fff;
+                 border:1.5px solid #e2e8f0;border-radius:14px;">
+              <div style="font-size:36px;">🔖</div>
+              <h3 style="font-family:'Fraunces',Georgia,serif;font-size:18px;
+                  color:#0d1a2b;margin:14px 0 8px;">Sin alertas guardadas</h3>
+              <p style="font-size:13px;color:#64748b;line-height:1.6;margin:0;">
+                Pulsa <strong>🔖 Seguir</strong> en cualquier proyecto<br>
+                para recibir alertas cuando avance de fase.
+              </p>
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:10px;'
+                f'color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px;">'
+                f'{len(_wl)} proyecto{"s" if len(_wl)!=1 else ""} en seguimiento</div>',
+                unsafe_allow_html=True
+            )
+            # Match watchlist expedientes to current sheet data
+            _wl_set = set(_wl)
+            _wl_rows = df[
+                df.get("expediente", pd.Series(dtype=str)).astype(str).str.strip().isin(_wl_set)
+            ] if "expediente" in df.columns else pd.DataFrame()
+
+            if not _wl_rows.empty:
+                for _, row in _wl_rows.iterrows():
+                    st.markdown(build_card(row.to_dict()), unsafe_allow_html=True)
+            else:
+                # Show expediente list even if not in current sheet
+                for exp_id in _wl:
+                    st.markdown(
+                        f'<div style="background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;'
+                        f'padding:12px 16px;margin-bottom:8px;font-family:\'JetBrains Mono\',monospace;'
+                        f'font-size:12px;color:#64748b;">🔖 Expediente: {html_lib.escape(str(exp_id))}</div>',
+                        unsafe_allow_html=True
+                    )
 
 # ── Footer ──
 st.markdown(f"""
