@@ -1821,6 +1821,15 @@ HARD_REJECT = [
     "permuta de bienes", "cesión de uso",
     "servicios de limpieza integral", "servicios de vigilancia",
     "servicios de mantenimiento de jardines",
+    "servicio de limpieza de",
+    "retirada de residuos",
+    "cabinas de almacenamiento",
+    "repuestos de juntas",
+    "anillos tóricos",
+    "contactores para el mantenimiento de",
+    "suministro de repuestos",
+    "radiodiagnóstico",
+    "armarios y puertas antivandálicas",
     # ── SMALL COMMERCIAL LICENCES — always noise, never worth capturing ────────
     # These activity types appear frequently in BOCM Section III as licencia de
     # actividad or apertura de establecimiento. They are NOT construction leads.
