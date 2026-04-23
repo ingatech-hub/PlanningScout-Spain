@@ -4381,14 +4381,33 @@ def run():
             # Daily mode: use top 15 highest-yield KWs only (fast ~15min, still valuable)
             if MODE == "daily":
                 _DAILY_KWS = {
-                    "obra mayor","licitación de obras","aprobación definitiva",
-                    "proyecto de urbanización","base imponible","primera ocupación",
-                    "cambio de uso","junta de compensación","rehabilitación integral",
-                    "declaración responsable","nueva construcción","adjudicación de obras",
-                    "plan especial","reparcelación","nave industrial",
+                    # Core permits — every profile
+                    "obra mayor", "licencia urbanística", "declaración responsable",
+                    # Urbanismo — biggest leads (FCC, Molecor, Kiloutou, Promotores)
+                    "proyecto de urbanización", "junta de compensación",
+                    "plan especial", "plan parcial", "reparcelación",
+                    "aprobación definitiva", "modificación puntual",
+                    # Licitaciones — Gran Constructora priority
+                    "licitación de obras", "adjudicación de obras",
+                    "resolución de adjudicación",
+                    # ICIO — legally confirmed construction, exact PEM
+                    "base imponible",
+                    # MEP + Hospe signals
+                    "primera ocupación", "rehabilitación integral",
+                    "rehabilitación energética",
+                    # Cambio de uso — Sharing Co holy grail
+                    "cambio de uso", "cambio de destino",
+                    # Industrial / Kiloutou
+                    "nave industrial", "demolición",
+                    # Molecor — saneamiento pipes
+                    "colector de saneamiento", "red de abastecimiento",
+                    "saneamiento de aguas",
+                    # Contribuciones especiales = live obra with confirmed budget
+                    "contribuciones especiales",
                 }
-                kw_list = [(kw,sec,min(max_pg,3),tag)
-                           for kw,sec,max_pg,tag in KW_WEEKLY if kw in _DAILY_KWS]
+                kw_list = [(kw, sec, min(max_pg, 3), tag)
+                           for kw, sec, max_pg, tag in KW_WEEKLY
+                           if kw in _DAILY_KWS]
 
             kw_total  = 0
             kw_n      = len(kw_list)
@@ -5238,24 +5257,74 @@ def search_datos_madrid(date_from, date_to, global_seen):
     """
     BASE = "https://datos.madrid.es"
 
-    # ── XLSX candidate URLs by year (tried newest→oldest) ────────────────────
-    # Resource IDs change each year — try all likely candidates
+   # ── XLSX / CSV candidate URLs ─────────────────────────────────────────────
+    # datos.madrid changes resource IDs every year — we auto-discover then try
+    # a broad candidate list so it works regardless of what ID they chose.
     _current_year = date_to.year
-    _XLSX_CANDIDATES = [
-        # Current year first
-        f"{BASE}/egob/catalogo/300193-2-licencias-urbanisticas-xlsx.xlsx",  # 2026
-        f"{BASE}/egob/catalogo/300193-1-licencias-urbanisticas-xlsx.xlsx",  # 2025
-        f"{BASE}/egob/catalogo/300193-3-licencias-urbanisticas-xlsx.xlsx",  # 2027 alt
-        f"{BASE}/egob/catalogo/300193-0-licencias-urbanisticas-xlsx.xlsx",  # generic
-        # Also try CSV variants
-        f"{BASE}/egob/catalogo/300193-10-licencias-urbanisticas.csv",
+
+    # Step 1: try auto-discovery from the dataset landing page
+    _DATASET_LANDING = (
+        f"{BASE}/portal/site/egob/menuitem.400a817358ce98c34e937436a8a409a0/"
+        f"?vgnextoid=300193&vgnextchannel=374512b9ace9f310VgnVCM100000171f5a0aRCRD"
+    )
+    _DATASET_EGOB = f"{BASE}/egob/catalogo/300193-0-licencias-urbanisticas"
+
+    def _discover_xlsx_url():
+        """Fetch the dataset page and scrape the real XLSX/CSV download href."""
+        for page_url in [_DATASET_EGOB, _DATASET_LANDING]:
+            try:
+                if DATOS_MADRID_PROXY:
+                    proxy_url = f"{DATOS_MADRID_PROXY}?url={quote(page_url, safe='')}"
+                    r = requests.get(proxy_url, timeout=15, verify=False,
+                                     headers={"Accept": "text/html,*/*"})
+                else:
+                    r = _dm_sess.get(page_url, timeout=20, allow_redirects=True)
+                if r.status_code != 200:
+                    continue
+                soup = BeautifulSoup(r.text, "html.parser")
+                # Look for download links in the page
+                for a in soup.find_all("a", href=True):
+                    href = a["href"]
+                    full = (f"{BASE}{href}" if href.startswith("/") else href)
+                    hl   = href.lower()
+                    if ("licencias" in hl or "300193" in hl):
+                        if hl.endswith(".xlsx"):
+                            log(f"  🏛️ datos.madrid: auto-discovered XLSX → {full.split('/')[-1]}")
+                            return full, None
+                        if hl.endswith(".csv"):
+                            log(f"  🏛️ datos.madrid: auto-discovered CSV  → {full.split('/')[-1]}")
+                            return full, None
+            except Exception as e:
+                continue
+        return None, None
+
+    _discovered_url, _ = _discover_xlsx_url()
+
+    # Step 2: candidate list (discovered URL first, then broad guesses)
+    # Resource IDs datos.madrid has used historically:
+    # 300193-0 (2023), 300193-1 (2024), 300193-2 (2025), 300193-3 (2026), 300193-4 (future)
+    _XLSX_CANDIDATES = []
+    if _discovered_url:
+        _XLSX_CANDIDATES.append(_discovered_url)
+    _XLSX_CANDIDATES += [
+        f"{BASE}/egob/catalogo/300193-3-licencias-urbanisticas-xlsx.xlsx",   # likely 2026
+        f"{BASE}/egob/catalogo/300193-2-licencias-urbanisticas-xlsx.xlsx",   # likely 2025
+        f"{BASE}/egob/catalogo/300193-4-licencias-urbanisticas-xlsx.xlsx",   # future
+        f"{BASE}/egob/catalogo/300193-1-licencias-urbanisticas-xlsx.xlsx",   # 2024
+        f"{BASE}/egob/catalogo/300193-0-licencias-urbanisticas-xlsx.xlsx",   # oldest
+        f"{BASE}/egob/catalogo/300193-3-licencias-urbanisticas.csv",
+        f"{BASE}/egob/catalogo/300193-2-licencias-urbanisticas.csv",
         f"{BASE}/egob/catalogo/300193-0-licencias-urbanisticas.csv",
     ]
+    # Deduplicate while preserving order
+    _seen_cand = set()
+    _XLSX_CANDIDATES = [u for u in _XLSX_CANDIDATES
+                        if not (_seen_cand.add(u) or u in _seen_cand - {u})]
+
     if DATOS_MADRID_PROXY:
-        _PROXY_XLSX = [f"{DATOS_MADRID_PROXY}?url={quote(u, safe='')}"
-                       for u in _XLSX_CANDIDATES]
+        log(f"  🏛️ datos.madrid: proxy configured ({DATOS_MADRID_PROXY.split('/')[2]})")
     else:
-        _PROXY_XLSX = []
+        log(f"  🏛️ datos.madrid: direct (no proxy — may fail from GitHub Actions)")
 
     # ── _fetch must be defined FIRST (before any nested function that uses it) ─
     from dateutil import parser as _dp
