@@ -48,6 +48,7 @@ jobs:
           GMAIL_FROM:               ${{ secrets.GMAIL_FROM }}
           GMAIL_APP_PASSWORD:       ${{ secrets.GMAIL_APP_PASSWORD }}
           GMAIL_TO_DEMO_MADRID:     ${{ secrets.GMAIL_TO_DEMO_MADRID }}
+          DATOS_MADRID_PROXY:       ${{ secrets.DATOS_MADRID_PROXY }}
           MAX_RUN_MINUTES:          "340"
         run: |
           # Determine weeks: use input if triggered manually, else always 1 (daily)
