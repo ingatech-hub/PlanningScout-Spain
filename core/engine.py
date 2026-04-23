@@ -3024,6 +3024,13 @@ Nueva construcción: "🔧 Ascensores X ud (X+X), HVAC VRF XkW, PCI rociadores +
 Industrial: "🔧 Eléctrica MT XkVA, iluminación LED industrial | 🛒 Estructura metálica Xt, panel sándwich Xm², solera Xm² | 🚧 Grúas, explanación, pavimentación"
 Rehab/CdU: "🔧 HVAC completo, fontanería nueva, eléctrica BT | 🛒 Tabiquería, acabados, carpintería RPT | 🚧 Plataformas tijera, andamios, herramientas menores"
 If no quantities found: estimate intelligently using PEM ratios. NEVER generic placeholders.
+ABSOLUTE RULE: NEVER return "🏗️ Proyecto N/D — analizar PDF técnico para especificaciones"
+That is a useless placeholder. Even with zero information from the document, estimate
+based on permit_type alone:
+- plan especial / parcial (no PEM): "🔧 Redes servicios estimadas: eléctrica BT, saneamiento, abastecimiento | 🛒 Hormigón, tuberías PVC, áridos | 🚧 Maquinaria urbanización según fase"
+- plan especial actividad: "🔧 HVAC terciario, eléctrica BT, PCI | 🛒 Tabiquería, carpintería, acabados | 🚧 Plataformas tijera, andamios"
+- urbanización sin PEM: "🔧 Viario + redes BT/MT + alumbrado | 🛒 Hormigón HA-25, tuberías PVC DN200-400, bordillos | 🚧 Excavadoras 20-30t, compactadores"
+Always provide a BEST-EFFORT estimate based on tipo. Zero placeholders.
 
 PROFILE_FIT — CRITICAL: Return MULTIPLE profiles for every project. NEVER return only ["promotores"].
 Profiles:
