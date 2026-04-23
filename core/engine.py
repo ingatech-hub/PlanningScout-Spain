@@ -80,11 +80,19 @@ MIN_VALUE_EUR        = int(os.environ.get("MIN_VALUE_EUR", "0"))
 # HOW TO SET UP (5 minutes, free):
 #   1. Go to https://workers.cloudflare.com/ → Create Worker
 #   2. Paste this JS and deploy:
-#      export default { async fetch(req) {
-#        const t = new URL(req.url).searchParams.get("url");
-#        if (!t?.startsWith("https://datos.madrid.es/")) return new Response("",{status:403});
-#        const r = await fetch(t,{headers:{"User-Agent":"Mozilla/5.0","Accept":"application/json","Accept-Language":"es-ES"}});
-#        return new Response(await r.text(),{headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"}});
+#      export default {
+#      async fetch(req) {
+#        const url = new URL(req.url);
+#        const t = url.searchParams.get("url");
+#        if (!t?.startsWith("https://datos.madrid.es/")) return new Response("Unauthorized",{status:403});
+#        const accept = req.headers.get("Accept") || "*/*";
+#        const r = await fetch(t,{
+#          headers:{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+#                   "Accept":accept,"Accept-Language":"es-ES,es;q=0.9","Referer":"https://datos.madrid.es/"},
+#          redirect:"follow"}});
+#        const ct = r.headers.get("content-type") || "application/octet-stream";
+#        const body = await r.arrayBuffer();
+#        return new Response(body,{status:r.status,headers:{"Content-Type":ct,"Access-Control-Allow-Origin":"*","Content-Length":String(body.byteLength)}});
 #      }}
 #   3. Note your worker URL (e.g. https://planningscout.myname.workers.dev)
 #   4. Add GitHub secret: DATOS_MADRID_PROXY = https://planningscout.myname.workers.dev
@@ -607,14 +615,331 @@ KW_EXTRA_FULL = [
 
 # Logistics corridor municipalities for targeted bonus search in full mode
 LOGISTICS_MUNICIPALITIES = [
-    "Valdemoro", "Getafe", "Pinto", "Parla",
+    # ── Primary logistics belt (SE arc: Valdemoro → Torrejón → Alcalá) ────────
+    "Valdemoro", "Getafe", "Pinto", "Parla", "Ciempozuelos",
     "Torrejón de Ardoz", "Coslada", "San Fernando de Henares",
     "Mejorada del Campo", "Rivas-Vaciamadrid", "Arganda del Rey",
+    "Velilla de San Antonio", "Loeches", "Torres de la Alameda",
+    # ── Northern tech corridor (A-1/A-10) ────────────────────────────────────
     "Alcalá de Henares", "Alcobendas", "Tres Cantos",
-    "San Sebastián de los Reyes", "Móstoles", "Leganés",
-    "Fuenlabrada", "Alcorcón", "Paracuellos de Jarama",
+    "San Sebastián de los Reyes", "Guadalix de la Sierra",
+    "Paracuellos de Jarama", "Daganzo de Arriba", "Meco", "Algete",
+    # ── Western residential/logistics (A-6/M-40) ─────────────────────────────
     "Majadahonda", "Las Rozas de Madrid", "Pozuelo de Alarcón",
+    "Boadilla del Monte", "Villanueva de la Cañada", "Galapagar",
+    # ── Southern manufacturing (A-4/A-42) ────────────────────────────────────
+    "Móstoles", "Leganés", "Fuenlabrada", "Alcorcón", "Navalcarnero",
+    "Humanes de Madrid", "Griñón", "Casarrubuelos", "Torrejón de Velasco",
 ]
+
+# ── Complete lookup: all 179 municipios of the Comunidad de Madrid ────────────
+# Used by extract_municipality() for fast, accurate name normalisation.
+_MADRID_MUNIS_179 = {
+    # A
+    "acebeda":                 "La Acebeda",
+    "la acebeda":              "La Acebeda",
+    "ajalvir":                 "Ajalvir",
+    "alamo":                   "El Álamo",
+    "el alamo":                "El Álamo",
+    "alcala de henares":       "Alcalá de Henares",
+    "alcalá de henares":       "Alcalá de Henares",
+    "alcobendas":              "Alcobendas",
+    "alcorcon":                "Alcorcón",
+    "alcorcón":                "Alcorcón",
+    "aldea del fresno":        "Aldea del Fresno",
+    "algete":                  "Algete",
+    "alpedrete":               "Alpedrete",
+    "ambite":                  "Ambite",
+    "anchuelo":                "Anchuelo",
+    "aranjuez":                "Aranjuez",
+    "arganda del rey":         "Arganda del Rey",
+    "arroyomolinos":           "Arroyomolinos",
+    # B
+    "batres":                  "Batres",
+    "becerril de la sierra":   "Becerril de la Sierra",
+    "belmonte de tajo":        "Belmonte de Tajo",
+    "berrueco":                "El Berrueco",
+    "el berrueco":             "El Berrueco",
+    "berzosa del lozoya":      "Berzosa del Lozoya",
+    "boadilla del monte":      "Boadilla del Monte",
+    "braojos":                 "Braojos",
+    "brea de tajo":            "Brea de Tajo",
+    "brunete":                 "Brunete",
+    "buitrago del lozoya":     "Buitrago del Lozoya",
+    "bustarviejo":             "Bustarviejo",
+    # C
+    "cabanillas de la sierra": "Cabanillas de la Sierra",
+    "cadalso de los vidrios":  "Cadalso de los Vidrios",
+    "camarma de esteruelas":   "Camarma de Esteruelas",
+    "campo real":              "Campo Real",
+    "canencia":                "Canencia",
+    "carabana":                "Carabaña",
+    "carabaña":                "Carabaña",
+    "casarrubuelos":           "Casarrubuelos",
+    "cercedilla":              "Cercedilla",
+    "cervera de buitrago":     "Cervera de Buitrago",
+    "ciempozuelos":            "Ciempozuelos",
+    "cobena":                  "Cobeña",
+    "cobeña":                  "Cobeña",
+    "collado mediano":         "Collado Mediano",
+    "collado villalba":        "Collado Villalba",
+    "colmenar de oreja":       "Colmenar de Oreja",
+    "colmenar del arroyo":     "Colmenar del Arroyo",
+    "colmenar viejo":          "Colmenar Viejo",
+    "colmenarejo":             "Colmenarejo",
+    "corpa":                   "Corpa",
+    "coslada":                 "Coslada",
+    "cubas de la sagra":       "Cubas de la Sagra",
+    # D
+    "daganzo de arriba":       "Daganzo de Arriba",
+    # E
+    "el atazar":               "El Atazar",
+    "el escorial":             "El Escorial",
+    "el molar":                "El Molar",
+    "el olmeda de las fuentes":"El Olmeda de las Fuentes",
+    "el vellon":               "El Vellón",
+    "el vellón":               "El Vellón",
+    # F
+    "fresnedillas de la oliva":"Fresnedillas de la Oliva",
+    "fresno de torote":        "Fresno de Torote",
+    "fuenlabrada":             "Fuenlabrada",
+    "fuente el saz de jarama": "Fuente el Saz de Jarama",
+    # G
+    "galapagar":               "Galapagar",
+    "garganta de los montes":  "Garganta de los Montes",
+    "gargantilla del lozoya":  "Gargantilla del Lozoya",
+    "gascones":                "Gascones",
+    "getafe":                  "Getafe",
+    "griñon":                  "Griñón",
+    "griñón":                  "Griñón",
+    "guadalix de la sierra":   "Guadalix de la Sierra",
+    "guadarrama":              "Guadarrama",
+    # H
+    "hoyo de manzanares":      "Hoyo de Manzanares",
+    "humanes de madrid":       "Humanes de Madrid",
+    # L
+    "la cabrera":              "La Cabrera",
+    "la hiruela":              "La Hiruela",
+    "la puebla de la sierra":  "La Puebla de la Sierra",
+    "la serna del monte":      "La Serna del Monte",
+    "las rozas de madrid":     "Las Rozas de Madrid",
+    "las rozas":               "Las Rozas de Madrid",
+    "leganes":                 "Leganés",
+    "leganés":                 "Leganés",
+    "loeches":                 "Loeches",
+    "lozoya":                  "Lozoya",
+    "lozoyuela-navas-sieteiglesias": "Lozoyuela-Navas-Sieteiglesias",
+    # M
+    "madarcos":                "Madarcos",
+    "madrid":                  "Madrid",
+    "majadahonda":             "Majadahonda",
+    "manzanares el real":      "Manzanares el Real",
+    "meco":                    "Meco",
+    "mejorada del campo":      "Mejorada del Campo",
+    "miraflores de la sierra": "Miraflores de la Sierra",
+    "moraleja de enmedio":     "Moraleja de Enmedio",
+    "moralzarzal":             "Moralzarzal",
+    "morata de tajuna":        "Morata de Tajuña",
+    "morata de tajuña":        "Morata de Tajuña",
+    "mostoles":                "Móstoles",
+    "móstoles":                "Móstoles",
+    # N
+    "navacerrada":             "Navacerrada",
+    "navalafuente":            "Navalafuente",
+    "navalagamella":           "Navalagamella",
+    "navalcarnero":            "Navalcarnero",
+    "navarredonda y san mames":"Navarredonda y San Mamés",
+    "navarredonda y san mamés":"Navarredonda y San Mamés",
+    "navas del rey":           "Navas del Rey",
+    "nuevo baztan":            "Nuevo Baztán",
+    "nuevo baztán":            "Nuevo Baztán",
+    # O
+    "olmeda de las fuentes":   "Olmeda de las Fuentes",
+    "orusco de tajuna":        "Orusco de Tajuña",
+    "orusco de tajuña":        "Orusco de Tajuña",
+    # P
+    "paracuellos de jarama":   "Paracuellos de Jarama",
+    "parla":                   "Parla",
+    "patones":                 "Patones",
+    "pedrezuela":              "Pedrezuela",
+    "pelayos de la presa":     "Pelayos de la Presa",
+    "perales de tajuna":       "Perales de Tajuña",
+    "perales de tajuña":       "Perales de Tajuña",
+    "pezuela de las torres":   "Pezuela de las Torres",
+    "pinilla del valle":       "Pinilla del Valle",
+    "pinto":                   "Pinto",
+    "pinuecar-gandullas":      "Piñuécar-Gandullas",
+    "piñuécar-gandullas":      "Piñuécar-Gandullas",
+    "pozuelo de alarcon":      "Pozuelo de Alarcón",
+    "pozuelo de alarcón":      "Pozuelo de Alarcón",
+    "pozuelo del rey":         "Pozuelo del Rey",
+    "pradena del rincon":      "Prádena del Rincón",
+    "prádena del rincón":      "Prádena del Rincón",
+    # Q
+    "quijorna":                "Quijorna",
+    # R
+    "rascafria":               "Rascafría",
+    "rascafría":               "Rascafría",
+    "redueña":                 "Redueña",
+    "ribatejada":              "Ribatejada",
+    "rivas-vaciamadrid":       "Rivas-Vaciamadrid",
+    "rivas vaciamadrid":       "Rivas-Vaciamadrid",
+    "robledillo de la jara":   "Robledillo de la Jara",
+    "robledo de chavela":      "Robledo de Chavela",
+    "robregordo":              "Robregordo",
+    "rozas de madrid":         "Las Rozas de Madrid",
+    # S
+    "san agustin del guadalix":"San Agustín del Guadalix",
+    "san agustín del guadalix":"San Agustín del Guadalix",
+    "san fernando de henares": "San Fernando de Henares",
+    "san lorenzo de el escorial": "San Lorenzo de El Escorial",
+    "san martin de la vega":   "San Martín de la Vega",
+    "san martín de la vega":   "San Martín de la Vega",
+    "san martin de valdeiglesias": "San Martín de Valdeiglesias",
+    "san martín de valdeiglesias": "San Martín de Valdeiglesias",
+    "san sebastian de los reyes": "San Sebastián de los Reyes",
+    "san sebastián de los reyes": "San Sebastián de los Reyes",
+    "santa maria de la alameda": "Santa María de la Alameda",
+    "santa maría de la alameda": "Santa María de la Alameda",
+    "santorcaz":               "Santorcaz",
+    "santos de la humosa":     "Santos de la Humosa",
+    "serranillos del valle":   "Serranillos del Valle",
+    "sevilla la nueva":        "Sevilla la Nueva",
+    "somosierra":              "Somosierra",
+    "soto del real":           "Soto del Real",
+    # T
+    "talamanca del jarama":    "Talamanca del Jarama",
+    "tielmes":                 "Tielmes",
+    "titulcia":                "Titulcia",
+    "torrejon de ardoz":       "Torrejón de Ardoz",
+    "torrejón de ardoz":       "Torrejón de Ardoz",
+    "torrejon de la calzada":  "Torrejón de la Calzada",
+    "torrejón de la calzada":  "Torrejón de la Calzada",
+    "torrejon de velasco":     "Torrejón de Velasco",
+    "torrejón de velasco":     "Torrejón de Velasco",
+    "torrelaguna":             "Torrelaguna",
+    "torrelodones":            "Torrelodones",
+    "torres de la alameda":    "Torres de la Alameda",
+    "tres cantos":             "Tres Cantos",
+    # V
+    "valdaracete":             "Valdaracete",
+    "valdeavero":              "Valdeavero",
+    "valdemanco":              "Valdemanco",
+    "valdemaqueda":            "Valdemaqueda",
+    "valdemorillo":            "Valdemorillo",
+    "valdemoro":               "Valdemoro",
+    "valdeolmos-alalpardo":    "Valdeolmos-Alalpardo",
+    "valdepielagos":           "Valdepielagos",
+    "valdetorres de jarama":   "Valdetorres de Jarama",
+    "valdilecha":              "Valdilecha",
+    "valverde de alcala":      "Valverde de Alcalá",
+    "valverde de alcalá":      "Valverde de Alcalá",
+    "velilla de san antonio":  "Velilla de San Antonio",
+    "venturada":               "Venturada",
+    "villa del prado":         "Villa del Prado",
+    "villaconejos":            "Villaconejos",
+    "villalbilla":             "Villalbilla",
+    "villamanrique de tajo":   "Villamanrique de Tajo",
+    "villamanta":              "Villamanta",
+    "villamantilla":           "Villamantilla",
+    "villanueva de la canada": "Villanueva de la Cañada",
+    "villanueva de la cañada": "Villanueva de la Cañada",
+    "villanueva de perales":   "Villanueva de Perales",
+    "villanueva del pardillo": "Villanueva del Pardillo",
+    "villarejo de salvanes":   "Villarejo de Salvanés",
+    "villarejo de salvanés":   "Villarejo de Salvanés",
+    "villaviciosa de odon":    "Villaviciosa de Odón",
+    "villaviciosa de odón":    "Villaviciosa de Odón",
+    # Z
+    "zarzalejo":               "Zarzalejo",
+}
+
+# ── GPS coordinates for all 179 municipios ────────────────────────────────────
+# Used for map display in dashboard
+_MUNI_COORDS_179 = {
+    "La Acebeda": (41.1703, -3.6397), "Ajalvir": (40.5415, -3.4632),
+    "El Álamo": (40.2200, -3.9700), "Alcalá de Henares": (40.4818, -3.3642),
+    "Alcobendas": (40.5472, -3.6415), "Alcorcón": (40.3456, -3.8264),
+    "Aldea del Fresno": (40.2756, -4.2344), "Algete": (40.5957, -3.4949),
+    "Alpedrete": (40.6588, -3.9934), "Ambite": (40.3200, -3.2300),
+    "Anchuelo": (40.4200, -3.3700), "Aranjuez": (40.0327, -3.6039),
+    "Arganda del Rey": (40.3053, -3.4392), "Arroyomolinos": (40.3769, -3.9989),
+    "Batres": (40.2100, -3.8900), "Becerril de la Sierra": (40.7188, -3.8906),
+    "Belmonte de Tajo": (40.1600, -3.3300), "El Berrueco": (40.8700, -3.5800),
+    "Berzosa del Lozoya": (41.0200, -3.7600), "Boadilla del Monte": (40.4050, -3.9200),
+    "Braojos": (41.0400, -3.7100), "Brea de Tajo": (40.1900, -3.2400),
+    "Brunete": (40.4014, -3.9976), "Buitrago del Lozoya": (40.9988, -3.6352),
+    "Bustarviejo": (40.8000, -3.7300), "Cabanillas de la Sierra": (40.7600, -3.6800),
+    "Cadalso de los Vidrios": (40.3200, -4.3700), "Camarma de Esteruelas": (40.5300, -3.4000),
+    "Campo Real": (40.3400, -3.3700), "Canencia": (40.8400, -3.7400),
+    "Carabaña": (40.2600, -3.2500), "Casarrubuelos": (40.2020, -3.8890),
+    "Cercedilla": (40.7411, -4.0570), "Cervera de Buitrago": (40.9800, -3.5600),
+    "Ciempozuelos": (40.1600, -3.6215), "Cobeña": (40.5636, -3.4841),
+    "Collado Mediano": (40.6972, -3.8844), "Collado Villalba": (40.6343, -4.0042),
+    "Colmenar de Oreja": (40.1050, -3.3817), "Colmenar del Arroyo": (40.4700, -4.0700),
+    "Colmenar Viejo": (40.6594, -3.7700), "Colmenarejo": (40.5600, -4.0300),
+    "Corpa": (40.4400, -3.3100), "Coslada": (40.4250, -3.5617),
+    "Cubas de la Sagra": (40.2158, -3.8384), "Daganzo de Arriba": (40.5464, -3.4341),
+    "El Atazar": (40.9500, -3.6000), "El Boalo": (40.7019, -3.9027),
+    "El Escorial": (40.5817, -4.1262), "El Molar": (40.7158, -3.5879),
+    "El Olmeda de las Fuentes": (40.4700, -3.2600), "El Vellón": (40.7300, -3.5400),
+    "Fresnedillas de la Oliva": (40.4700, -4.0800), "Fresno de Torote": (40.5700, -3.4200),
+    "Fuenlabrada": (40.2850, -3.7945), "Fuente el Saz de Jarama": (40.6235, -3.4856),
+    "Galapagar": (40.5866, -4.0023), "Garganta de los Montes": (40.9000, -3.7600),
+    "Gargantilla del Lozoya": (40.9600, -3.7400), "Gascones": (41.0200, -3.6500),
+    "Getafe": (40.3055, -3.7326), "Griñón": (40.2125, -3.8684),
+    "Guadalix de la Sierra": (40.7636, -3.6364), "Guadarrama": (40.6727, -4.0829),
+    "Hoyo de Manzanares": (40.6300, -3.9100), "Humanes de Madrid": (40.2593, -3.8270),
+    "La Cabrera": (40.8574, -3.6133), "La Hiruela": (41.0700, -3.5600),
+    "La Puebla de la Sierra": (41.0400, -3.5800), "La Serna del Monte": (40.9800, -3.5800),
+    "Las Rozas de Madrid": (40.4944, -3.8711), "Leganés": (40.3282, -3.7641),
+    "Loeches": (40.3700, -3.4100), "Lozoya": (40.9600, -3.7700),
+    "Lozoyuela-Navas-Sieteiglesias": (40.8800, -3.7000), "Madarcos": (41.0400, -3.6300),
+    "Madrid": (40.4168, -3.7038), "Majadahonda": (40.4744, -3.8721),
+    "Manzanares el Real": (40.7249, -3.8600), "Meco": (40.5530, -3.3350),
+    "Mejorada del Campo": (40.3961, -3.4920), "Miraflores de la Sierra": (40.8155, -3.7726),
+    "Moraleja de Enmedio": (40.2200, -3.8700), "Moralzarzal": (40.7113, -3.8817),
+    "Morata de Tajuña": (40.2500, -3.4500), "Móstoles": (40.3228, -3.8632),
+    "Navacerrada": (40.7811, -4.0110), "Navalafuente": (40.7700, -3.6300),
+    "Navalagamella": (40.4700, -4.1400), "Navalcarnero": (40.2856, -3.9965),
+    "Navarredonda y San Mamés": (40.6900, -3.9700), "Navas del Rey": (40.2900, -4.2600),
+    "Nuevo Baztán": (40.3200, -3.2800), "Olmeda de las Fuentes": (40.4700, -3.2600),
+    "Orusco de Tajuña": (40.2700, -3.2600), "Paracuellos de Jarama": (40.5065, -3.5271),
+    "Parla": (40.2381, -3.7653), "Patones": (40.8800, -3.6000),
+    "Pedrezuela": (40.7100, -3.6100), "Pelayos de la Presa": (40.2900, -4.2500),
+    "Perales de Tajuña": (40.2600, -3.3500), "Pezuela de las Torres": (40.4100, -3.2800),
+    "Pinilla del Valle": (40.9800, -3.8000), "Pinto": (40.2472, -3.6964),
+    "Piñuécar-Gandullas": (41.0400, -3.6800), "Pozuelo de Alarcón": (40.4350, -3.8146),
+    "Pozuelo del Rey": (40.3900, -3.3100), "Prádena del Rincón": (41.0200, -3.6100),
+    "Quijorna": (40.4168, -3.9900), "Rascafría": (40.8900, -3.8700),
+    "Redueña": (40.7900, -3.5600), "Ribatejada": (40.5900, -3.3700),
+    "Rivas-Vaciamadrid": (40.3526, -3.5278), "Robledillo de la Jara": (40.9200, -3.5600),
+    "Robledo de Chavela": (40.5068, -4.2424), "Robregordo": (41.0600, -3.6200),
+    "San Agustín del Guadalix": (40.7107, -3.6171), "San Fernando de Henares": (40.4200, -3.5300),
+    "San Lorenzo de El Escorial": (40.5906, -4.1427), "San Martín de la Vega": (40.2078, -3.5680),
+    "San Martín de Valdeiglesias": (40.3600, -4.3800), "San Sebastián de los Reyes": (40.5508, -3.6265),
+    "Santa María de la Alameda": (40.5700, -4.3600), "Santorcaz": (40.4400, -3.3100),
+    "Santos de la Humosa": (40.4200, -3.3700), "Serranillos del Valle": (40.2300, -3.9600),
+    "Sevilla la Nueva": (40.3556, -3.9711), "Somosierra": (41.1278, -3.5831),
+    "Soto del Real": (40.7666, -3.7813), "Talamanca del Jarama": (40.6700, -3.5300),
+    "Tielmes": (40.2400, -3.3000), "Titulcia": (40.1900, -3.5400),
+    "Torrejón de Ardoz": (40.4556, -3.4818), "Torrejón de la Calzada": (40.2300, -3.7900),
+    "Torrejón de Velasco": (40.2000, -3.7500), "Torrelaguna": (40.8300, -3.5800),
+    "Torrelodones": (40.5667, -3.9328), "Torres de la Alameda": (40.4284, -3.3774),
+    "Tres Cantos": (40.5959, -3.7047), "Valdaracete": (40.2400, -3.1200),
+    "Valdeavero": (40.5300, -3.3800), "Valdemanco": (40.8200, -3.6000),
+    "Valdemaqueda": (40.5200, -4.2400), "Valdemorillo": (40.5000, -4.0700),
+    "Valdemoro": (40.1918, -3.6762), "Valdeolmos-Alalpardo": (40.6200, -3.4900),
+    "Valdepielagos": (40.6800, -3.5500), "Valdetorres de Jarama": (40.6000, -3.4500),
+    "Valdilecha": (40.3468, -3.2897), "Valverde de Alcalá": (40.4000, -3.3100),
+    "Velilla de San Antonio": (40.3600, -3.4900), "Venturada": (40.7600, -3.5800),
+    "Villa del Prado": (40.2762, -4.2777), "Villaconejos": (40.1600, -3.4700),
+    "Villalbilla": (40.4284, -3.3017), "Villamanrique de Tajo": (40.1700, -3.2900),
+    "Villamanta": (40.3300, -4.1200), "Villamantilla": (40.3500, -4.0900),
+    "Villanueva de la Cañada": (40.4500, -3.9700), "Villanueva de Perales": (40.3700, -4.0900),
+    "Villanueva del Pardillo": (40.4748, -3.9354), "Villarejo de Salvanés": (40.1700, -3.3400),
+    "Villaviciosa de Odón": (40.3556, -3.9003), "Zarzalejo": (40.5400, -4.1700),
+}
 
 # ── Day-scan broad keywords ────────────────────────────────────────────────────
 DAY_SCAN_KWS   = [
@@ -2362,11 +2687,9 @@ def score_lead(p):
         elif val >= 50_000:     score += 6
 
     # Logistics corridor bonus — industrial in prime Madrid logistics belt
-    logistics_munis = {"valdemoro","getafe","coslada","alcalá de henares","torrejón de ardoz",
-                       "arganda del rey","fuenlabrada","alcobendas","san sebastián de los reyes",
-                       "rivas-vaciamadrid","mejorada del campo","pinto","parla"}
-    if any(m in muni for m in logistics_munis) and "industrial" in pt:
-        score += 5
+    logistics_munis = {m.lower() for m in LOGISTICS_MUNICIPALITIES}
+    if any(m in muni for m in logistics_munis) and any(k in pt for k in ["industrial","logístic","almacén","nave"]):
+        score += 8   # full logistics belt bonus, not just industrial
 
     # EU Next Gen rehabilitation bonus — confirmed budget, MEP priority
     if any(k in desc for k in ["rehabilitación energética","eficiencia energética",
@@ -2482,6 +2805,29 @@ def parse_spanish_date(s):
     return s[:10] if len(s) >= 10 else s
 
 def extract_municipality(text):
+    """Extract municipality name from BOCM document text.
+    
+    Priority: direct 179-municipio lookup → regex patterns → "Madrid".
+    Covers all 179 municipios of the Comunidad de Madrid with accent-tolerant matching.
+    """
+    import unicodedata as _ud
+
+    def _norm(s):
+        """Normalize: lowercase, remove accents, strip."""
+        return ''.join(c for c in _ud.normalize('NFD', s.lower()) if _ud.category(c) != 'Mn').strip()
+
+    t_lower = text.lower()
+
+    # Step 1: Fast direct lookup against known 179-municipio list
+    # Try longest matches first to avoid "Getafe" matching inside "Getafe Sur"
+    for raw_name, canonical in sorted(_MADRID_MUNIS_179.items(), key=lambda x: -len(x[0])):
+        if raw_name in t_lower:
+            return canonical
+        # Accent-insensitive fallback
+        if _norm(raw_name) in _norm(text):
+            return canonical
+
+    # Step 2: Regex patterns for cases where the name appears in a sentence
     patterns = [
         r'AYUNTAMIENTO\s+DE\s+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s\-]+?)(?:\n|\s{2,}|LICENCIAS|OTROS|CONTRATACIÓN|URBANISMO|ANUNCIO)',
         r'ayuntamiento de\s+([A-ZÁÉÍÓÚÑ][A-Za-záéíóúñ\s\-]+?)(?:\.|,|\n)',
@@ -2494,8 +2840,11 @@ def extract_municipality(text):
         m = re.search(pat, text, re.I)
         if m:
             name = m.group(1).strip().rstrip(".,; ").strip()
-            if name.lower() not in noise and 3 < len(name) < 65:
-                return name.title()
+            nl = name.lower()
+            if nl not in noise and 3 < len(name) < 65:
+                # Check if extracted name matches a known municipio
+                canonical = _MADRID_MUNIS_179.get(nl) or _MADRID_MUNIS_179.get(_norm(name))
+                return canonical if canonical else name.title()
     return "Madrid"
 
 def extract_expediente(text):
@@ -3044,6 +3393,8 @@ Profiles:
 "promotores" — reparcelación, DIR, segregación, plan parcial, convenio
 "hospe" — cambio de uso residencial/hospedaje, rehab edificios, plurifamiliar, primera ocupación
 "actiu" — oficinas, coworking, hoteles, hospitales, universidades, edificios terciarios
+  "kiloutou" — alquiler maquinaria: demolición, vaciado, excavación, cimentación = ACTUAR YA
+  "molecor" — tuberías PVC: saneamiento, colector, red abastecimiento, pluviales
 
 MANDATORY MULTI-PROFILE RULES (always apply):
 - Urbanización/reparcelación → ALWAYS: ["promotores","constructora","alquiler","materiales"] + "infrastructura" if >€10M
@@ -4289,7 +4640,7 @@ def run():
     date_from = today - timedelta(weeks=WEEKS_BACK)
 
     log("=" * 70)
-    log(f"🏗️  PlanningScout Madrid — Engine v15 (datos-XLSX+daily-kwscan+S3daily+tuple-fix)")
+    log(f"🏗️  PlanningScout Madrid — Engine v16 (179munis+BORME-S8+logistics40+dedup-fix+AI-kiloutou)")
     log(f"📅  {today.strftime('%Y-%m-%d %H:%M')}  |  Mode: {MODE.upper()}")
     log(f"📆  {date_from.strftime('%d/%m/%Y')} → {date_to.strftime('%d/%m/%Y')} ({WEEKS_BACK}w)")
     log(f"⚙️  {N_WORKERS} processing workers  |  ⏱️ Budget: {MAX_RUN_MINUTES}min")
@@ -4566,6 +4917,24 @@ def run():
                 log(f"  datos.madrid: ✅{dm_saved} saved | ⏭️{dm_skipped} skipped | ❌{dm_errors} errors")
             else:
                 pass   # datos.madrid logs its own status internally
+
+        # ── SOURCE 8: BORME — new construction company registrations ──────────────
+        # DoubleTrade's "corporate data" layer: newly formed promotores and
+        # construction companies in Madrid = early signals 12-24mo before BOCM.
+        # api.boe.es/BORME/v2/ is free, official, no WAF block from GitHub Actions.
+        if MODE in ("weekly","full") and time_ok(need_s=60):
+            log(f"\n{'─'*55}")
+            log("📋 SOURCE 8: BORME (nuevas empresas constructoras/promotoras)")
+            borme_items = search_borme_new_companies(date_from, date_to)
+            if borme_items:
+                log(f"  📋 BORME: {len(borme_items)} new construction companies detected")
+                for item in borme_items[:20]:   # cap at 20 to avoid noise
+                    company = item.get("company","")
+                    date_s  = item.get("date","")
+                    borme_id= item.get("borme_id","")
+                    log(f"    🏢 {company} ({date_s})")
+            else:
+                log("  📋 BORME: no new construction companies in date range")
 
         # ── Remove already-seen from the collected BOCM queue ──────────────────
         all_urls = [u for u in all_urls
@@ -5277,8 +5646,14 @@ def search_datos_madrid(date_from, date_to, global_seen):
     _DATASET_EGOB = f"{BASE}/egob/catalogo/300193-0-licencias-urbanisticas"
 
     def _discover_xlsx_url():
-        """Fetch the dataset page and scrape the real XLSX/CSV download href."""
-        for page_url in [_DATASET_EGOB, _DATASET_LANDING]:
+        """Fetch the dataset downloads page and scrape the real XLSX/CSV href.
+        
+        Madrid portal serves downloads from /dataset/*/downloads HTML page.
+        The "Descarga" buttons link to the real file URLs.
+        We scrape these rather than guessing paths.
+        """
+        _DOWNLOADS_PAGE = f"{BASE}/dataset/300193-0-licencias-urbanisticas/downloads"
+        for page_url in [_DOWNLOADS_PAGE, _DATASET_EGOB, _DATASET_LANDING]:
             try:
                 if DATOS_MADRID_PROXY:
                     proxy_url = f"{DATOS_MADRID_PROXY}?url={quote(page_url, safe='')}"
@@ -5289,18 +5664,35 @@ def search_datos_madrid(date_from, date_to, global_seen):
                 if r.status_code != 200:
                     continue
                 soup = BeautifulSoup(r.text, "html.parser")
-                # Look for download links in the page
+                # Scrape all download links — Madrid portal uses several patterns:
+                # a) /egob/catalogo/300193-N-licencias-*.xlsx (direct file)
+                # b) /portal/site/egob/menuitem.*/download?id=...
+                # c) data-href or onclick attributes on download buttons
+                all_links = []
                 for a in soup.find_all("a", href=True):
                     href = a["href"]
                     full = (f"{BASE}{href}" if href.startswith("/") else href)
-                    hl   = href.lower()
-                    if ("licencias" in hl or "300193" in hl):
+                    if not full.startswith("http"): continue
+                    hl = href.lower()
+                    text = a.get_text(strip=True).lower()
+                    # Match any link related to licencias / 300193 dataset
+                    is_relevant = ("licencias" in hl or "300193" in hl or
+                                   "descarga" in text or "download" in text)
+                    if is_relevant:
                         if hl.endswith(".xlsx"):
-                            log(f"  🏛️ datos.madrid: auto-discovered XLSX → {full.split('/')[-1]}")
+                            log(f"  🏛️ datos.madrid: found XLSX → {full.split('/')[-1]}")
                             return full, None
                         if hl.endswith(".csv"):
-                            log(f"  🏛️ datos.madrid: auto-discovered CSV  → {full.split('/')[-1]}")
-                            return full, None
+                            all_links.append(("csv", full))
+                        elif "download" in hl or "descarga" in text:
+                            all_links.append(("download", full))
+                # Return best non-XLSX link found
+                for link_type, full in all_links:
+                    if link_type == "csv":
+                        log(f"  🏛️ datos.madrid: found CSV → {full.split('/')[-1]}")
+                        return full, None
+                    log(f"  🏛️ datos.madrid: found download link → {full[:80]}")
+                    return full, None
             except Exception as e:
                 continue
         return None, None
@@ -5313,20 +5705,35 @@ def search_datos_madrid(date_from, date_to, global_seen):
     _XLSX_CANDIDATES = []
     if _discovered_url:
         _XLSX_CANDIDATES.append(_discovered_url)
+    # Candidate URLs — Madrid portal uses /egob/catalogo/ pattern
+    # Resource IDs rotate yearly (300193-0=2024, 300193-1=2025, 300193-2=2026, etc.)
+    # NOTE: if all return 404, update the CF Worker JS (see engine source top) 
+    # to forward Accept: */* instead of application/json
+    _current_year = date_to.year
     _XLSX_CANDIDATES += [
-        f"{BASE}/egob/catalogo/300193-3-licencias-urbanisticas-xlsx.xlsx",   # likely 2026
-        f"{BASE}/egob/catalogo/300193-2-licencias-urbanisticas-xlsx.xlsx",   # likely 2025
-        f"{BASE}/egob/catalogo/300193-4-licencias-urbanisticas-xlsx.xlsx",   # future
-        f"{BASE}/egob/catalogo/300193-1-licencias-urbanisticas-xlsx.xlsx",   # 2024
-        f"{BASE}/egob/catalogo/300193-0-licencias-urbanisticas-xlsx.xlsx",   # oldest
-        f"{BASE}/egob/catalogo/300193-3-licencias-urbanisticas.csv",
+        # Current year + recent (try 3 most likely IDs first)
+        f"{BASE}/egob/catalogo/300193-{_current_year - 2024 + 2}-licencias-urbanisticas-xlsx.xlsx",
+        f"{BASE}/egob/catalogo/300193-{_current_year - 2024 + 1}-licencias-urbanisticas-xlsx.xlsx",
+        f"{BASE}/egob/catalogo/300193-{_current_year - 2024}-licencias-urbanisticas-xlsx.xlsx",
+        # Fixed known IDs
+        f"{BASE}/egob/catalogo/300193-2-licencias-urbanisticas-xlsx.xlsx",
+        f"{BASE}/egob/catalogo/300193-1-licencias-urbanisticas-xlsx.xlsx",
+        f"{BASE}/egob/catalogo/300193-3-licencias-urbanisticas-xlsx.xlsx",
+        f"{BASE}/egob/catalogo/300193-0-licencias-urbanisticas-xlsx.xlsx",
+        f"{BASE}/egob/catalogo/300193-4-licencias-urbanisticas-xlsx.xlsx",
+        # CSV variants (smaller, faster)
+        f"{BASE}/egob/catalogo/300193-{_current_year - 2024 + 2}-licencias-urbanisticas.csv",
         f"{BASE}/egob/catalogo/300193-2-licencias-urbanisticas.csv",
         f"{BASE}/egob/catalogo/300193-0-licencias-urbanisticas.csv",
     ]
     # Deduplicate while preserving order
-    _seen_cand = set()
-    _XLSX_CANDIDATES = [u for u in _XLSX_CANDIDATES
-                        if not (_seen_cand.add(u) or u in _seen_cand - {u})]
+    _seen_cand: set = set()
+    _XLSX_CANDIDATES_dedup = []
+    for _u in _XLSX_CANDIDATES:
+        if _u not in _seen_cand:
+            _seen_cand.add(_u)
+            _XLSX_CANDIDATES_dedup.append(_u)
+    _XLSX_CANDIDATES = _XLSX_CANDIDATES_dedup
 
     if DATOS_MADRID_PROXY:
         log(f"  🏛️ datos.madrid: proxy configured ({DATOS_MADRID_PROXY.split('/')[2]})")
@@ -5353,7 +5760,7 @@ def search_datos_madrid(date_from, date_to, global_seen):
     def _fetch(url, timeout=90, accept=None):
         """Returns (response_or_None, error_string)."""
         # Proxy path (if configured)
-        if DATOS_MADRID_PROXY and "egob/catalogo" in url:
+        if DATOS_MADRID_PROXY and "datos.madrid.es" in url:
             proxy_url = f"{DATOS_MADRID_PROXY}?url={quote(url, safe='')}"
             try:
                 r = requests.get(proxy_url, timeout=30, verify=False,
