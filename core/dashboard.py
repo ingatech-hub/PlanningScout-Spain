@@ -866,7 +866,7 @@ def parse_est_pem_numeric(text):
     return 0.0
 
 def fmt(v):
-    if v == 0:    return "—"
+    if v == 0:    return "Prioridad"
     if v >= 1e6:  return f"€{v/1e6:.1f}M"
     if v >= 1000: return f"€{int(v/1000)}K"
     return f"€{int(v):,}"
