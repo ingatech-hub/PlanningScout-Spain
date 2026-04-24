@@ -4,12 +4,25 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 from datetime import datetime, timedelta
 import re
+import secrets as _secrets_mod
 from urllib.parse import unquote
 import html as html_lib
 import html as _html_esc  # alias used in card builder
 import os
 import base64
 import urllib.parse   # used in geocoding
+
+# ════════════════════════════════════════════════════════════
+# SESSION PERSISTENCE — 12-hour tokens stored in process memory
+#
+# When the user refreshes the browser, the Streamlit WebSocket
+# reconnects to the SAME server process on Streamlit Cloud.
+# The URL is preserved, so ?s=TOKEN is still present.
+# This module-level dict survives between reruns of the same process.
+# On server restart (Streamlit Cloud weekly), users re-login once.
+# ════════════════════════════════════════════════════════════
+_AUTH_TOKENS: dict = {}   # token → (email, perfil, expires_at)
+_SESSION_HOURS = 12
 
 # ── Auto-install folium if not present ──────────────────────
 try:
@@ -165,6 +178,7 @@ def log_activity(email, action="login"):
 qp          = st.query_params
 url_token   = qp.get("token", "")
 url_profile = unquote(qp.get("perfil", ""))   # decode %20, %2F, emoji encoding etc.
+url_session = qp.get("s", "")                 # 12-hour session persistence token
 
 client_tokens = {}
 try:
@@ -177,6 +191,16 @@ except Exception:
 for _k, _v in [("authenticated", False), ("user_email", ""), ("login_error", ""), ("user_perfil", ""), ("_transitioning", False)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
+
+# ── Restore from 12-hour session token (survives browser page refresh) ────────
+if not st.session_state["authenticated"] and url_session:
+    _stored = _AUTH_TOKENS.get(url_session)
+    if _stored:
+        _tok_email, _tok_perfil, _tok_expires = _stored
+        if datetime.now() < _tok_expires:
+            st.session_state["authenticated"] = True
+            st.session_state["user_email"]    = _tok_email
+            st.session_state["user_perfil"]   = _tok_perfil
 
 # ── Transition intercept ── Must be FIRST content check after state init.
 # When _transitioning=True the previous cycle just authenticated the user.
@@ -329,13 +353,21 @@ header[data-testid="stHeader"] { display: none !important; }
         _p = _pass_in.strip()
         if _e in _users and _users[_e] == _p:
             _assigned = _secret_profiles.get(_e, "general")
+            # Create a 12-hour session token so page refresh doesn't log out
+            _new_tok = _secrets_mod.token_hex(24)
+            _AUTH_TOKENS[_new_tok] = (
+                _e, _assigned,
+                datetime.now() + timedelta(hours=_SESSION_HOURS)
+            )
             st.session_state["authenticated"]  = True
             st.session_state["user_email"]     = _e
             st.session_state["login_error"]    = ""
             st.session_state["user_perfil"]    = _assigned
-            st.session_state["_transitioning"] = True   # triggers loader on next cycle
+            st.session_state["_session_tok"]   = _new_tok
+            st.session_state["_transitioning"] = True
+            st.query_params["s"] = _new_tok   # persists in URL through refresh
             log_activity(_e, "login")
-            st.rerun()   # natural rerun → intercepted by _transitioning block above
+            st.rerun()
         else:
             st.session_state["login_error"] = "Credenciales incorrectas. Verifica tu email y contraseña."
 
@@ -495,14 +527,12 @@ button[kind="secondary"]:has(> div > p:contains("🔖")) {
 /* Hide Streamlit "Press Enter to apply" hint */
 [data-testid="InputInstructions"] { display: none !important; }
 
-/* Seguir / Siguiendo button — sits flush below each card */
-[data-testid="stHorizontalBlock"] [data-testid="stColumn"]:first-child button {
+/* Seguir / Siguiendo st.button — sits just below the card, small and clean */
+/* Only targets the specific narrow column (1 of 8 split) used in the render loop */
+.seguir-col button {
     font-size: 12px !important;
     font-weight: 600 !important;
     padding: 5px 14px !important;
-    border-radius: 0 0 10px 10px !important;
-    margin-top: -2px !important;
-    border-top: none !important;
 }
 
 /* ── DARK MODE ───────────────────────────────────────────────────────────────
@@ -1749,10 +1779,15 @@ with st.sidebar:
      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{_udisplay}</p>
 </div>""", unsafe_allow_html=True)
         if st.button("\u21a9 Cerrar sesi\u00f3n", key="logout_btn"):
+            # Invalidate the session token
+            _tok_to_del = st.session_state.get("_session_tok", "")
+            if _tok_to_del: _AUTH_TOKENS.pop(_tok_to_del, None)
             st.session_state["authenticated"] = False
             st.session_state["user_email"]    = ""
             st.session_state["login_error"]   = ""
             st.session_state["user_perfil"]   = ""
+            st.session_state["_session_tok"]  = ""
+            st.query_params.pop("s", None)
             st.rerun()
 
         # ── Password change ──
@@ -2248,7 +2283,8 @@ with _tab_alertas:
             "0": ("",   "Sin prioridad", "#fff",  "#94a3b8", "#e2e8f0"),
         }
         def _gprio(r): return str(r.get("priority","0") or "0").strip() or "0"
-        _wl_full.sort(key=lambda r: (0 if _gprio(r)=="0" else -int(_gprio(r))))
+        # P1 sorts first (ascending by number), no-priority last
+        _wl_full.sort(key=lambda r: int(_gprio(r)) if _gprio(r) != "0" else 999)
 
         if not _wl_full:
             st.markdown("""
@@ -2260,10 +2296,15 @@ with _tab_alertas:
   </p>
 </div>""", unsafe_allow_html=True)
         else:
+            # Pre-filter garbled expedientes before counting
+            _wl_valid = [r for r in _wl_full
+                         if str(r.get("expediente","") or "").strip()
+                         and len(str(r.get("expediente","") or "").strip()) <= 40
+                         and not str(r.get("expediente","") or "").strip().isupper()]
             st.markdown(
                 f'<p style="font-family:\'JetBrains Mono\',monospace;font-size:10px;color:#94a3b8;'
                 f'text-transform:uppercase;letter-spacing:.08em;margin:0 0 16px;">'
-                f'{len(_wl_full)} proyecto{"s" if len(_wl_full)!=1 else ""} en seguimiento</p>',
+                f'{len(_wl_valid)} proyecto{"s" if len(_wl_valid)!=1 else ""} en seguimiento</p>',
                 unsafe_allow_html=True)
 
             # Build index of leads data
@@ -2273,13 +2314,11 @@ with _tab_alertas:
                     _k = str(_r.get("expediente","")).strip()
                     if _k: _df_idx[_k] = _r
 
-            for _wr in _wl_full:
+            for _wr in _wl_valid:
                 _exp_s = str(_wr.get("expediente","") or "").strip()
                 if not _exp_s: continue
 
-                # Validate expediente looks real (filter garbled session-state artifacts)
-                if len(_exp_s) > 40 or _exp_s.isupper():
-                    continue
+                # (already filtered above)
 
                 _safe_k = re.sub(r'[^a-zA-Z0-9_]', '_', _exp_s)
                 _pv     = _gprio(_wr)
