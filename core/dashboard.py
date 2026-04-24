@@ -1013,8 +1013,9 @@ def build_compact_row(row: dict, full_card_html: str) -> str:
         f'</details>'
     )
 
-def build_card(row, is_watched=False, inside_details=False,
-               toggle_href="", prio_val="0", prio_hrefs=None):
+def build_card(row, is_watched=False, inside_details=False):
+    # NOTE: Seguir + priority buttons are native st.button() in the render loop.
+    # No <a href> action links — those caused new-tab navigation in Streamlit.
     """
     Build one lead card with ONLY inline styles.
     This guarantees correct rendering regardless of Streamlit's Markdown parser.
@@ -1263,54 +1264,10 @@ def build_card(row, is_watched=False, inside_details=False,
         f'&body={html_lib.escape("Municipio: " + muni + chr(10) + "Dirección: " + addr + chr(10) + "Expediente: " + expd + chr(10) + "URL: " + bocm)}'
     )
 
-    # ── In-card Seguir toggle — <a href> preserves ?s= session token ────────────
-    # is_watched + toggle_href → green "🔔 Siguiendo" (click = unfollow)
-    # not watched + toggle_href → navy "🔔 Seguir"   (click = follow)
-    _SBT_CARD = (
-        f"{_F};display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;"
-        f"padding:5px 12px;border-radius:7px;text-decoration:none;white-space:nowrap;"
-    )
-    if toggle_href:
-        if is_watched:
-            _seguir_el = (
-                f'<a href="{toggle_href}" title="Clic para dejar de seguir" '
-                f'style="{_SBT_CARD}color:#16a34a;background:#f0fdf4;border:1.5px solid #bbf7d0;">'
-                f'🔔 Siguiendo</a>'
-            )
-        else:
-            _seguir_el = (
-                f'<a href="{toggle_href}" title="Seguir este proyecto y recibir alertas" '
-                f'style="{_SBT_CARD}color:#1e3a5f;background:#fff;border:1.5px solid #1e3a5f;">'
-                f'🔔 Seguir</a>'
-            )
-    else:
-        _seguir_el = ""
-
-    # ── In-card Priority selector — 3 tiny <a href> circles ───────────────────
-    _prio_colors = {
-        "1": ("#dc2626","#fef2f2","#fecaca"),
-        "2": ("#d97706","#fffbeb","#fde68a"),
-        "3": ("#2563eb","#eff6ff","#bfdbfe"),
-    }
-    if prio_hrefs is None: prio_hrefs = {}
-    _prio_els = []
-    for _pnum, (_pfc, _pfb, _pfbd) in _prio_colors.items():
-        _is_active = prio_val == _pnum
-        _p_href = prio_hrefs.get(_pnum, "")
-        _p_style = (
-            f"{_F};display:inline-flex;align-items:center;justify-content:center;"
-            f"width:24px;height:24px;border-radius:50%;font-size:10px;font-weight:700;"
-            f"text-decoration:none;"
-            + (f"background:{_pfc};color:#fff;" if _is_active else f"background:{_pfb};color:{_pfc};border:1px solid {_pfbd};")
-        )
-        _el = (f'<a href="{_p_href}" style="{_p_style}" title="Prioridad {_pnum}">P{_pnum}</a>'
-               if _p_href else
-               f'<span style="{_p_style}cursor:default;">P{_pnum}</span>')
-        _prio_els.append(_el)
-    _prio_group = (
-        f'<div style="display:inline-flex;align-items:center;gap:3px;'
-        f'background:#f1f5f9;border-radius:20px;padding:3px 5px;">{"".join(_prio_els)}</div>'
-    ) if toggle_href else ""
+    # Seguir / priority buttons are now native st.button() calls in the render
+    # loop — outside the HTML card. This prevents Streamlit's <a href> new-tab bug.
+    _seguir_el  = ""
+    _prio_group = ""
 
     _reportar_el = (
         f'<a href="{_mailto}" style="{_F};display:inline-flex;align-items:center;gap:3px;'
@@ -1323,8 +1280,6 @@ def build_card(row, is_watched=False, inside_details=False,
         f'<div style="{SFO}">'
         + "".join(links)
         + f'<span style="{SNO}">{_src_label}</span>'
-        + (_prio_group + " " if _prio_group else "")
-        + _seguir_el
         + " " + _reportar_el
         + '</div>'
     )
@@ -1796,7 +1751,7 @@ def load_data():
             "https://www.googleapis.com/auth/drive",
         ])
         gc = gspread.authorize(creds)
-        ws = gc.open_by_key(st.secrets.get("SHEET_ID", SHEET_ID)).worksheet("Permits")
+        ws = gc.open_by_key(st.secrets.get("SHEET_ID", SHEET_ID)).worksheet("Leads")
         data = ws.get_all_records()
         return pd.DataFrame(data) if data else pd.DataFrame()
     except Exception as ex:
@@ -2417,7 +2372,7 @@ with _tab_leads:
         _watched_set   = (_sheet_watched | st.session_state["just_saved"]) - st.session_state["just_removed"]
 
         for _, row in df_f.iterrows():
-            # Stable unique key: expediente (ideal) → BOCM slug → URL hash.
+            # ── Stable unique key ─────────────────────────────────────────────
             _exp = str(row.get("expediente","") or "").strip()
             if not _exp or _exp.lower() in ("nan","none"):
                 _bocm_raw = str(row.get("bocm_url","") or "")
@@ -2428,40 +2383,87 @@ with _tab_leads:
                     _exp = f"BOCM-{abs(hash(_bocm_raw)) % 10**10}"
             _already = (_exp in _watched_set) if _exp else False
 
-            # ── Compact row (click to expand full card) ──────────────────────────
-            # Build action URLs for in-card Seguir toggle and Priority buttons.
-            # The ?s= session token is embedded so auth survives the click.
-            _sess = st.session_state.get("_session_tok","")
-            _t_href   = ""
-            _p_hrefs  = {}
-            _pv_now   = "0"  # current priority for this lead (from watchlist)
-            if _exp and _is_real_user and _sess:
-                _t_href  = _card_action_url("toggle", _u, _exp, _sess)
-                _p_hrefs = {
-                    pv: _card_action_url("setprio", _u, _exp, _sess, pv=pv)
-                    for pv in ("1","2","3","0")
-                }
-                # Current priority from watchlist (if saved)
-                if _exp in _watched_set:
-                    try:
-                        _wl_full_tmp = load_watchlist_full(_u)
-                        for _wr in _wl_full_tmp:
-                            if str(_wr.get("expediente","")).strip() == _exp:
-                                _pv_now = str(_wr.get("priority","0") or "0").strip() or "0"
-                                break
-                    except Exception:
-                        pass
+            # Current priority (only fetched once per card if already watched)
+            _pv_now = "0"
+            if _already and _is_real_user:
+                try:
+                    for _wrt in load_watchlist_full(_u):
+                        if str(_wrt.get("expediente","")).strip() == _exp:
+                            _pv_now = str(_wrt.get("priority","0") or "0").strip() or "0"
+                            break
+                except Exception:
+                    pass
 
-            _full_html = build_card(
-                row.to_dict(),
-                is_watched=_already,
-                inside_details=True,
-                toggle_href=_t_href,
-                prio_val=_pv_now,
-                prio_hrefs=_p_hrefs,
-            )
+            # ── Card HTML (pure display — no action links) ────────────────────
+            _full_html = build_card(row.to_dict(), is_watched=_already, inside_details=True)
             st.markdown(build_compact_row(row.to_dict(), _full_html), unsafe_allow_html=True)
-            # No external st.button() needed — all actions are inside the card HTML
+
+            # ── Native action buttons — RIGHT below each card ─────────────────
+            # st.button() triggers a Python rerun (never opens a new tab).
+            # Displayed as a compact flush-right bar: [P1][P2][P3]  🔔 Seguir
+            if _exp and _is_real_user:
+                _safe_k = re.sub(r'[^a-zA-Z0-9_]', '_', _exp)
+
+                # Priority buttons (only shown when already watching)
+                _prio_colors_btn = {
+                    "1": ("#dc2626","#fef2f2"),
+                    "2": ("#d97706","#fffbeb"),
+                    "3": ("#2563eb","#eff6ff"),
+                }
+
+                # Build compact action bar using columns
+                # Layout: [spacer(6)] [P1(1)] [P2(1)] [P3(1)] [Seguir(2)]
+                _c_sp, _c1, _c2, _c3, _c_f = st.columns([6, 1, 1, 1, 2])
+
+                if _already:
+                    # Priority pills — P1/P2/P3 toggle active state
+                    for _pnum, _col in [("1",_c1),("2",_c2),("3",_c3)]:
+                        with _col:
+                            _fc, _fb = _prio_colors_btn[_pnum]
+                            _is_active = _pv_now == _pnum
+                            _btn_type  = "primary" if _is_active else "secondary"
+                            if st.button(
+                                f"P{_pnum}",
+                                key=f"prio_{_pnum}_{_safe_k}",
+                                help=f"Prioridad {_pnum}",
+                                use_container_width=True,
+                                type=_btn_type,
+                            ):
+                                # Toggle: clicking active priority resets to 0
+                                _new_pv = "0" if _is_active else _pnum
+                                update_watchlist_row(_u, _exp, priority=int(_new_pv))
+                                st.session_state["_prio_cache"] = {
+                                    **st.session_state.get("_prio_cache",{}),
+                                    _exp: _new_pv
+                                }
+                                load_watchlist.clear()
+                                st.rerun()
+                    with _c_f:
+                        if st.button(
+                            "🔔 Siguiendo ✕",
+                            key=f"rm_{_safe_k}",
+                            help="Dejar de seguir",
+                            use_container_width=True,
+                        ):
+                            remove_from_watchlist(_u, _exp)
+                            st.session_state.setdefault("just_removed",set()).add(_exp)
+                            st.session_state.get("just_saved",set()).discard(_exp)
+                            load_watchlist.clear()
+                            st.rerun()
+                else:
+                    # Not watching — only show Seguir (no priority pills yet)
+                    with _c_f:
+                        if st.button(
+                            "🔔 Seguir",
+                            key=f"sv_{_safe_k}",
+                            help="Seguir este proyecto y recibir alertas de cambio de fase",
+                            use_container_width=True,
+                        ):
+                            add_to_watchlist(_u, row.to_dict())
+                            st.session_state.setdefault("just_saved",set()).add(_exp)
+                            st.session_state.get("just_removed",set()).discard(_exp)
+                            load_watchlist.clear()
+                            st.rerun()
 
 # ── TAB 2: INTERACTIVE MAP ───────────────────────────────────
 with _tab_mapa:
@@ -2609,57 +2611,83 @@ with _tab_alertas:
                         "fase": _wr.get("phase_at_add",""),
                         "tipo": "",
                     }
-                # Build in-card action URLs for Mis Alertas cards too
-                _sess_al  = st.session_state.get("_session_tok","")
-                _t_href_al = ""
-                _p_hrefs_al = {}
-                if _sess_al:
-                    _t_href_al  = _card_action_url("toggle", _ua, _exp_s, _sess_al)
-                    _p_hrefs_al = {
-                        pv: _card_action_url("setprio", _ua, _exp_s, _sess_al, pv=pv)
-                        for pv in ("1","2","3","0")
-                    }
+                # ── Card (pure display — no action links) ─────────────────
                 st.markdown(build_card(
-                    _card_row,
-                    is_watched=True,   # always True in Mis Alertas (these are saved projects)
-                    inside_details=False,
-                    toggle_href=_t_href_al,
-                    prio_val=_pv,
-                    prio_hrefs=_p_hrefs_al,
+                    _card_row, is_watched=True, inside_details=False,
                 ), unsafe_allow_html=True)
-                # No external priority selectbox or Dejar de seguir button needed
-                # — both are now handled by in-card <a href> action links
 
-                # Notes — collapsible expander, full text_area so long notes are always readable
+                # ── Action bar: notes + priority + Dejar de seguir ────────────
+                # Layout: [📝 notes expander (fills width)] [P1][P2][P3] [✕ Dejar]
+                # All native st.button() — zero <a href> navigation.
+                _prio_colors_al = {
+                    "1": ("#dc2626","#fef2f2"),
+                    "2": ("#d97706","#fffbeb"),
+                    "3": ("#2563eb","#eff6ff"),
+                }
                 _note_label = (
-                    f"📝 {_note_display[:50]}{'…' if len(_note_display) > 50 else ''}"
-                    if _note_display else "📝 Añadir nota privada…"
+                    f"📝 {_note_display[:40]}{'…' if len(_note_display) > 40 else ''}"
+                    if _note_display else "📝 Nota privada…"
                 )
-                with st.expander(_note_label, expanded=False):
-                    _nc1, _nc2 = st.columns([8, 1])
-                    with _nc1:
+
+                # Row: [note expander(5)] [P1(1)][P2(1)][P3(1)] [Dejar(2)]
+                _ac1, _ac2, _ac3, _ac4, _ac5 = st.columns([5, 1, 1, 1, 2])
+
+                with _ac1:
+                    with st.expander(_note_label, expanded=False):
                         _typed = st.text_area(
                             "Nota", value=_note_display,
                             placeholder="Añade contexto, contactos, próximos pasos…",
                             key=f"note_{_safe_k}", label_visibility="collapsed",
-                            height=90,
+                            height=80,
                         )
-                    with _nc2:
-                        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-                        if st.button("💾", key=f"savenote_{_safe_k}",
-                                     help="Guardar nota", use_container_width=True):
-                            st.session_state["alert_notes_local"][_exp_s] = _typed
-                            ok = update_watchlist_row(_ua, _exp_s, notes=_typed)
-                            if ok:
-                                st.session_state["alert_notes_saved_ok"].add(_exp_s)
-                                st.toast("✅ Nota guardada", icon="💾")
-                            else:
-                                st.toast("⚠️ No se pudo guardar.")
-                            st.rerun()
-                    if _note_saved_ok and _note_display:
-                        st.caption("✓ Nota guardada")
+                        _s1, _s2 = st.columns([5,1])
+                        with _s2:
+                            if st.button("💾 Guardar", key=f"savenote_{_safe_k}",
+                                         use_container_width=True):
+                                st.session_state["alert_notes_local"][_exp_s] = _typed
+                                ok = update_watchlist_row(_ua, _exp_s, notes=_typed)
+                                if ok:
+                                    st.session_state["alert_notes_saved_ok"].add(_exp_s)
+                                    st.toast("✅ Nota guardada", icon="💾")
+                                else:
+                                    st.toast("⚠️ No se pudo guardar.")
+                                st.rerun()
+                        with _s1:
+                            if _note_saved_ok and _note_display:
+                                st.caption("✓ Guardada")
 
-                st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+                # Priority toggles (P1/P2/P3)
+                for _pnum_al, _col_al in [("1",_ac2),("2",_ac3),("3",_ac4)]:
+                    with _col_al:
+                        _is_active_al = _pv == _pnum_al
+                        if st.button(
+                            f"P{_pnum_al}",
+                            key=f"prio_{_pnum_al}_{_safe_k}",
+                            help=f"Prioridad {_pnum_al}",
+                            use_container_width=True,
+                            type="primary" if _is_active_al else "secondary",
+                        ):
+                            _new_pv_al = "0" if _is_active_al else _pnum_al
+                            update_watchlist_row(_ua, _exp_s, priority=int(_new_pv_al))
+                            load_watchlist.clear()
+                            st.rerun()
+
+                with _ac5:
+                    # Small vertical spacer so button aligns with expander
+                    st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
+                    if st.button(
+                        "✕ Dejar de seguir",
+                        key=f"rm_al_{_safe_k}",
+                        help="Eliminar de Mis alertas",
+                        use_container_width=True,
+                    ):
+                        remove_from_watchlist(_ua, _exp_s)
+                        st.session_state.setdefault("just_removed",set()).add(_exp_s)
+                        st.session_state.get("just_saved",set()).discard(_exp_s)
+                        load_watchlist.clear()
+                        st.rerun()
+
+                st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
 # ── Footer ──
 st.markdown(f"""
