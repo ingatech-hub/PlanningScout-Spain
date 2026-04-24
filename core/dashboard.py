@@ -2552,7 +2552,7 @@ with _tab_alertas:
                 _PRIO_OPTS = ["—", "🔴 P1", "🟡 P2", "🔵 P3"]
                 _PRIO_VAL  = {"—":"0","🔴 P1":"1","🟡 P2":"2","🔵 P3":"3"}
                 _PRIO_BACK = {"0":"—","1":"🔴 P1","2":"🟡 P2","3":"🔵 P3"}
-                _cur_label = _PRIO_BACK.get(_pv, "Prioridad")
+                _cur_label = _PRIO_BACK.get(_pv, "—Prioridad—")
 
                 _note_lbl = (
                     f"📝 {_note_display[:50]}{'…' if len(_note_display)>50 else ''}"
