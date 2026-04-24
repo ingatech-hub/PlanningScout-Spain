@@ -868,21 +868,20 @@ def build_compact_row(row: dict, full_card_html: str) -> str:
     desc  = html_lib.escape(str(row.get("descripcion","") or "").strip())
     tipo  = html_lib.escape(str(row.get("tipo","") or "").strip())
     bocm  = str(row.get("bocm_url","") or "").strip()
-    fnd   = str(row.get("fecha_encontrado","") or "").strip()
-    fecha = str(row.get("fecha","") or "").strip()
+    # Date: always use col A "Date Granted" (fecha) — not "Date Found"
+    fecha_granted = str(row.get("fecha","") or "").strip()
     pem_est_text = str(row.get("pem_est_raw","") or "").strip()
     pem_raw_v    = parse_val(row.get("pem_raw",""))
     pem_est_v    = parse_est_pem_numeric(pem_est_text)
     pem_display  = pem_raw_v if pem_raw_v > 0 else pem_est_v
 
-    # BOCM ref
+    # BOCM ref — date from col A only
     ref = ""
     m_bocm = re.search(r'BOCM[-_](\d{8})', bocm, re.I)
     if m_bocm: ref = f"BOCM-{m_bocm.group(1)}"
-    pub = fnd[:10] if fnd else fecha
-    if pub:
+    if fecha_granted:
         try:
-            dt = datetime.strptime(pub, "%Y-%m-%d")
+            dt = datetime.strptime(fecha_granted[:10], "%Y-%m-%d")
             ref += f" · {dt.strftime('%-d %b %Y')}" if ref else dt.strftime("%-d %b %Y")
         except Exception:
             pass
@@ -951,7 +950,7 @@ def build_compact_row(row: dict, full_card_html: str) -> str:
         f'</details>'
     )
 
-def build_card(row, is_watched=False):
+def build_card(row, is_watched=False, inside_details=False):
     """
     Build one lead card with ONLY inline styles.
     This guarantees correct rendering regardless of Streamlit's Markdown parser.
@@ -981,7 +980,7 @@ def build_card(row, is_watched=False):
 
     pem_s = fmt(pem_c)
 
-    # BOCM / BOE reference + date
+    # BOCM / BOE reference — date from col A "Date Granted" (fecha), never fecha_encontrado
     ref_parts = []
     if bocm:
         _bocm_is_boe = bocm.lower().startswith("https://www.boe.es") or bocm.lower().startswith("https://boe.es")
@@ -992,13 +991,14 @@ def build_card(row, is_watched=False):
             m = re.search(r'BOCM[-_](\d{8})', bocm, re.I)
             if m:
                 ref_parts.append(f"BOCM-{m.group(1)}")
-    pub = fnd[:10] if fnd else fecha
-    if pub:
+    # Use col A (Date Granted = fecha) for the date shown in the card
+    _date_granted = str(row.get("fecha","") or "").strip()
+    if _date_granted:
         try:
-            dt = datetime.strptime(pub, "%Y-%m-%d")
-            ref_parts.append(f"Publicado: {dt.strftime('%-d %b %Y')}")
+            dt = datetime.strptime(_date_granted[:10], "%Y-%m-%d")
+            ref_parts.append(f"Concedido: {dt.strftime('%-d %b %Y')}")
         except Exception:
-            ref_parts.append(pub)
+            ref_parts.append(_date_granted[:10])
     ref_str = " · ".join(ref_parts)
 
     # Title
@@ -1057,8 +1057,8 @@ def build_card(row, is_watched=False):
             "padding:2px 6px;margin-right:4px;'>BOE</span>"
         )
 
-    # ─ HEADER (inline styles, guaranteed to render) ─
-    head = (
+    # ─ HEADER — suppressed inside_details (already shown in the summary row) ─
+    head = "" if inside_details else (
         f'<div style="{SH}">'
         f'  <div style="{SLO}">'
         f'    <div style="{SDO}"></div>'
@@ -1069,8 +1069,9 @@ def build_card(row, is_watched=False):
     )
 
     # ─ BODY ─
-    ref_html   = f'<div style="{SRF}">{ref_str}</div>' if ref_str else ""
-    title_html = f'<div style="{STI}">{title}</div>'
+    # ref, title, desc_preview suppressed inside_details (already in summary row)
+    ref_html   = "" if inside_details else (f'<div style="{SRF}">{ref_str}</div>' if ref_str else "")
+    title_html = "" if inside_details else f'<div style="{STI}">{title}</div>'
 
     # ── Project size (new col W) ──
     _proj_size = esc(row.get("project_size", "") or "")
@@ -1198,11 +1199,21 @@ def build_card(row, is_watched=False):
         f'&body={html_lib.escape("Municipio: " + muni + chr(10) + "Dirección: " + addr + chr(10) + "Expediente: " + expd + chr(10) + "URL: " + bocm)}'
     )
 
-    # ── Seguir state — NO visual in card HTML for is_watched.
-    # The st.button("🔔 Siguiendo") rendered after the card IS the indicator.
-    # Having both the green span AND the button = the "duplicate" users saw.
-    # Card footer shows nothing for seguir state — button below card handles it.
-    _seguir_el = ""  # intentionally empty — st.button handles all seguir UI
+    # ── Seguir — purely visual inside card footer ─────────────────────────────
+    # is_watched=True  → static green "🔔 Siguiendo" pill (no click needed in list)
+    # is_watched=False → empty (real st.button renders just below the card, compact)
+    _SBT_SEGUIR = (
+        f"{_F};display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;"
+        f"padding:4px 11px;border-radius:7px;white-space:nowrap;"
+    )
+    if is_watched:
+        _seguir_el = (
+            f'<span style="{_SBT_SEGUIR}color:#16a34a;background:#f0fdf4;'
+            f'border:1.5px solid #bbf7d0;cursor:default;" title="Siguiendo este proyecto">'
+            f'🔔 Siguiendo</span>'
+        )
+    else:
+        _seguir_el = ""  # st.button("🔔 Seguir") renders compact below card
 
     _reportar_el = (
         f'<a href="{_mailto}" style="{_F};display:inline-flex;align-items:center;gap:3px;'
@@ -1214,8 +1225,8 @@ def build_card(row, is_watched=False):
     footer = (
         f'<div style="{SFO}">'
         + "".join(links)
-        + _seguir_el
         + f'<span style="{SNO}">{_src_label}</span>'
+        + _seguir_el
         + _reportar_el
         + '</div>'
     )
@@ -2319,31 +2330,20 @@ with _tab_leads:
                     _exp = f"BOCM-{abs(hash(_bocm_raw)) % 10**10}"
             _already = (_exp in _watched_set) if _exp else False
 
-            # ── Compact clickable row (click to expand full card) ─────────────
-            # <details>/<summary> pure HTML — zero JS, no Streamlit workarounds.
-            # The full card renders only when expanded (faster list loading).
-            _full_html = build_card(row.to_dict(), is_watched=False)
-            st.markdown(
-                build_compact_row(row.to_dict(), _full_html),
-                unsafe_allow_html=True,
-            )
+            # ── Compact row (click to expand) — passes is_watched and inside_details=True
+            # inside_details=True suppresses duplicate header/ref/title in expanded card
+            _full_html = build_card(row.to_dict(), is_watched=_already, inside_details=True)
+            st.markdown(build_compact_row(row.to_dict(), _full_html), unsafe_allow_html=True)
 
-            # ── Seguir / Siguiendo button ─────────────────────────────────────
+            # ── Seguir button — compact, right-aligned, only when not already following
+            # When _already=True, green Siguiendo shown inside card footer HTML (no external btn needed)
             if _exp and _is_real_user:
                 _safe_k = re.sub(r'[^a-zA-Z0-9_]', '_', _exp)
-                _sc, _sp = st.columns([1, 7])
-                with _sc:
-                    if _already:
-                        if st.button("🔔 Siguiendo ✕", key=f"rm_{_safe_k}",
-                                     help="Clic para dejar de seguir",
-                                     use_container_width=True):
-                            remove_from_watchlist(_u, _exp)
-                            st.session_state["just_removed"].add(_exp)
-                            st.session_state["just_saved"].discard(_exp)
-                            st.rerun()
-                    else:
+                if not _already:
+                    _sp, _sc = st.columns([8, 1])
+                    with _sc:
                         if st.button("🔔 Seguir", key=f"sv_{_safe_k}",
-                                     help="Alertas cuando este proyecto avance de fase",
+                                     help="Guardar alerta para este proyecto",
                                      use_container_width=True):
                             _ok = add_to_watchlist(_u, row.to_dict())
                             if _ok:
@@ -2352,6 +2352,17 @@ with _tab_leads:
                                 st.toast("🔔 Guardado en Mis alertas.", icon="✅")
                             else:
                                 st.toast("❌ Error guardando. Inténtalo de nuevo.")
+                            st.rerun()
+                else:
+                    # Followed: show compact remove button right-aligned
+                    _sp, _sc = st.columns([8, 1])
+                    with _sc:
+                        if st.button("✕", key=f"rm_{_safe_k}",
+                                     help="Dejar de seguir este proyecto",
+                                     use_container_width=True):
+                            remove_from_watchlist(_u, _exp)
+                            st.session_state["just_removed"].add(_exp)
+                            st.session_state["just_saved"].discard(_exp)
                             st.rerun()
 
 # ── TAB 2: INTERACTIVE MAP ───────────────────────────────────
@@ -2500,44 +2511,23 @@ with _tab_alertas:
                         "fase": _wr.get("phase_at_add",""),
                         "tipo": "",
                     }
-                st.markdown(build_card(_card_row, is_watched=False), unsafe_allow_html=True)
+                st.markdown(build_card(_card_row, is_watched=False, inside_details=False), unsafe_allow_html=True)
 
-                # ── Controls row: [Priority pill] [Notes input  💾] [✕ Remove] ─
-                # All on one tight line, visually attached to the card bottom.
-                # Priority → compact selectbox (no label, auto-width)
-                # Notes    → single-line text input + small inline save button
-                # Remove   → muted secondary button, right-aligned
-                _ctl1, _ctl2, _ctl3, _ctl4 = st.columns([2, 4, 1, 2])
-                with _ctl1:
-                    _PRIO_OPTS = {"0":"— Sin prioridad","1":"🔴 Prioridad 1",
-                                  "2":"🟠 Prioridad 2","3":"🟡 Prioridad 3"}
+                # ── Controls: [spacer] [P1/P2/P3 selectbox] [✕ Dejar de seguir] ─
+                # Priority on the RIGHT as compact P1/P2/P3 pill
+                _rw1, _rw2, _rw3 = st.columns([4, 2, 2])
+                with _rw2:
+                    _PRIO_SHORT = {"0":"— prioridad","1":"🔴 P1","2":"🟠 P2","3":"🟡 P3"}
                     _new_pv = st.selectbox(
-                        "Prioridad", options=["0","1","2","3"],
-                        format_func=lambda p: _PRIO_OPTS[p],
+                        "P", options=["0","1","2","3"],
+                        format_func=lambda p: _PRIO_SHORT[p],
                         index=["0","1","2","3"].index(_pv),
                         key=f"prio_{_safe_k}", label_visibility="collapsed",
                     )
                     if _new_pv != _pv:
                         update_watchlist_row(_ua, _exp_s, priority=int(_new_pv))
                         load_watchlist.clear(); st.rerun()
-                with _ctl2:
-                    _typed = st.text_input(
-                        "Nota", value=_note_display,
-                        placeholder="Mis notas privadas…",
-                        key=f"note_{_safe_k}", label_visibility="collapsed",
-                    )
-                with _ctl3:
-                    if st.button("💾", key=f"savenote_{_safe_k}",
-                                 help="Guardar nota", use_container_width=True):
-                        st.session_state["alert_notes_local"][_exp_s] = _typed
-                        ok = update_watchlist_row(_ua, _exp_s, notes=_typed)
-                        if ok:
-                            st.session_state["alert_notes_saved_ok"].add(_exp_s)
-                            st.toast("✅ Nota guardada", icon="💾")
-                        else:
-                            st.toast("⚠️ No se pudo guardar.")
-                        st.rerun()
-                with _ctl4:
+                with _rw3:
                     if st.button("✕ Dejar de seguir", key=f"rm_al_{_safe_k}",
                                  use_container_width=True):
                         remove_from_watchlist(_ua, _exp_s)
@@ -2547,14 +2537,36 @@ with _tab_alertas:
                         st.session_state["alert_notes_saved_ok"].discard(_exp_s)
                         load_watchlist.clear(); st.rerun()
 
-                # Saved confirmation (shows inline, fades into small caption)
-                if _note_saved_ok and _note_display:
-                    st.markdown(
-                        '<p style="font-size:10px;color:#16a34a;margin:-4px 0 4px;'
-                        'font-family:\'JetBrains Mono\',monospace;">✓ Nota guardada</p>',
-                        unsafe_allow_html=True)
+                # Notes — collapsible expander, full text_area so long notes are always readable
+                _note_label = (
+                    f"📝 {_note_display[:50]}{'…' if len(_note_display) > 50 else ''}"
+                    if _note_display else "📝 Añadir nota privada…"
+                )
+                with st.expander(_note_label, expanded=False):
+                    _nc1, _nc2 = st.columns([8, 1])
+                    with _nc1:
+                        _typed = st.text_area(
+                            "Nota", value=_note_display,
+                            placeholder="Añade contexto, contactos, próximos pasos…",
+                            key=f"note_{_safe_k}", label_visibility="collapsed",
+                            height=90,
+                        )
+                    with _nc2:
+                        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+                        if st.button("💾", key=f"savenote_{_safe_k}",
+                                     help="Guardar nota", use_container_width=True):
+                            st.session_state["alert_notes_local"][_exp_s] = _typed
+                            ok = update_watchlist_row(_ua, _exp_s, notes=_typed)
+                            if ok:
+                                st.session_state["alert_notes_saved_ok"].add(_exp_s)
+                                st.toast("✅ Nota guardada", icon="💾")
+                            else:
+                                st.toast("⚠️ No se pudo guardar.")
+                            st.rerun()
+                    if _note_saved_ok and _note_display:
+                        st.caption("✓ Nota guardada")
 
-                st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+                st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
 # ── Footer ──
 st.markdown(f"""
