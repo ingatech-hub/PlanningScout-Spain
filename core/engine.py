@@ -2818,13 +2818,19 @@ def extract_municipality(text):
 
     t_lower = text.lower()
 
-    # Step 1: Fast direct lookup against known 179-municipio list
-    # Try longest matches first to avoid "Getafe" matching inside "Getafe Sur"
+    # Step 1: Fast lookup against all 179 municipios with word-boundary matching.
+    # Longest-first to avoid "parla" matching in "declaración responsable".
+    # Use word boundaries so "getafe" doesn't fire in "getafe-sur-industrial".
+    import re as _re
+    _tn = _norm(text)
     for raw_name, canonical in sorted(_MADRID_MUNIS_179.items(), key=lambda x: -len(x[0])):
-        if raw_name in t_lower:
+        # Build word-boundary pattern (handles hyphens/accents)
+        _pat = r"(?<![a-záéíóúñ-])" + re.escape(raw_name) + r"(?![a-záéíóúñ-])"
+        if re.search(_pat, t_lower):
             return canonical
-        # Accent-insensitive fallback
-        if _norm(raw_name) in _norm(text):
+        # Accent-insensitive word-boundary fallback
+        _pat_n = r"(?<![a-zaeioun-])" + re.escape(_norm(raw_name)) + r"(?![a-zaeioun-])"
+        if re.search(_pat_n, _tn):
             return canonical
 
     # Step 2: Regex patterns for cases where the name appears in a sentence
@@ -4459,75 +4465,118 @@ def _run_ai_backfill():
 # These are promotores who just incorporated → likely have land/project.
 def search_borme_new_companies(date_from, date_to):
     """
-    Scan BORME for new construction company registrations in Madrid.
-    Returns list of (company_name, directors, capital, date) tuples.
-    These are EARLY SIGNALS — promotores before they appear in BOCM.
+    SOURCE 8: BORME — Boletín Oficial del Registro Mercantil.
+
+    Scans for new construction/promotor company registrations in Madrid.
+    These are EARLY SIGNALS — new promotores incorporated 12-24 months
+    before their projects appear in BOCM.
+
+    Uses www.boe.es/diario_borme/xml.php (same accessible server as SOURCE 5).
+    api.boe.es is NOT used — it's unreachable from GitHub Actions (DNS failure).
+    The www.boe.es XML endpoint is free, official, and works from all IPs.
     """
-    results = []
-    # Scan each working day in range
+    results   = []
+    _consec_err = 0   # abort after 5 consecutive connection errors
+
+    # Only scan WEEKLY/FULL — too slow for daily (one request per working day)
     d = date_from
     while d <= date_to:
-        if d.weekday() >= 5:
+        if d.weekday() >= 5:            # skip weekends
             d += timedelta(days=1); continue
-        if not time_ok(need_s=20): break
+        if not time_ok(need_s=30): break
+        if _consec_err >= 5:
+            log(f"  📋 BORME: 5 consecutive errors — aborting")
+            break
 
-        borme_url = f"https://api.boe.es/BORME/v2/sumario/{d.strftime('%Y%m%d')}"
+        # BORME XML sumario via www.boe.es (accessible from GitHub Actions)
+        borme_url = (f"https://www.boe.es/diario_borme/xml.php"
+                     f"?id=BORME-S-{d.strftime('%Y%m%d')}")
         try:
-            r = safe_get(borme_url, timeout=15)
-            if not r or r.status_code != 200:
+            r = safe_get(borme_url, timeout=20)
+            if not r or r.status_code not in (200, 201):
+                _consec_err += 1
                 d += timedelta(days=1); continue
 
-            data = r.json()
-            # BORME sumario has "diario" → "secciones" → "emisores"
-            diario = data.get("data", {}).get("sumario", {}).get("diario", [])
-            if not isinstance(diario, list): diario = [diario]
+            _consec_err = 0
+            import xml.etree.ElementTree as _ET_B
+            root = _ET_B.fromstring(r.content)
 
-            for dia in diario:
-                secciones = dia.get("secciones", {}).get("seccion", [])
-                if not isinstance(secciones, list): secciones = [secciones]
+            # BORME XML structure:
+            # <sumario><diario><seccion nombre="SECCIÓN SEGUNDA...">
+            #   <departamento nombre="REGISTRO MERCANTIL DE MADRID">
+            #     <anuncio id="BORME-A-YYYY-NNNN">
+            #       <titulo>CONSTITUCIÓN</titulo> or AMPLIACIÓN CAPITAL, NOMBRAMIENTO...
+            #       <url_pdf>...</url_pdf>
+            # We want CONSTITUCIÓN + AMPLIACIÓN DE CAPITAL in REGISTRO MERCANTIL DE MADRID
 
-                for sec in secciones:
-                    # BORME Section C = Actos inscritos (new companies, capital changes)
-                    if str(sec.get("@codigo","")) not in ("C",): continue
+            _INTERESTING_ACTS = {
+                "constitución", "constituciones", "ampliación de capital",
+                "modificaciones estatutarias", "cambio de objeto social",
+            }
+            _CONSTRUCT_TERMS = [
+                "construccion", "construc", "promoci", "inmobili", "urban",
+                "edificac", "obras", "rehab", "reform", "desarrollo",
+                "real estate", "inversion", "patrimon", "proyecto",
+            ]
 
-                    emisores = sec.get("emisores", {}).get("emisor", [])
-                    if not isinstance(emisores, list): emisores = [emisores]
+            for seccion in root.iter("seccion"):
+                sec_nombre = (seccion.get("nombre") or "").lower()
+                # Only Sección Segunda (Anuncios y avisos legales — Registro Mercantil)
+                # AND Sección Primera (Empresas)
+                if "segunda" not in sec_nombre and "primera" not in sec_nombre:
+                    continue
 
-                    for em in emisores:
-                        em_name = str(em.get("nombre_emisor","") or "").strip()
-                        em_lower = em_name.lower()
+                for dep in seccion.iter("departamento"):
+                    dep_nombre = (dep.get("nombre") or "").lower()
+                    if "madrid" not in dep_nombre and "registro mercantil" not in dep_nombre:
+                        continue
 
-                        # Filter: Madrid construction companies
-                        _CONSTRUCT_TERMS = [
-                            "construcciones", "construc", "promociones", "promot",
-                            "inmobiliaria", "inmobi", "urbanizaciones", "edificaciones",
-                            "inversiones inmobiliarias", "real estate", "desarrollo urbano",
-                            "obras y", "contrata", "rehabilitación", "reform",
-                        ]
-                        if not any(t in em_lower for t in _CONSTRUCT_TERMS):
+                    for anuncio in dep.iter("anuncio"):
+                        anuncio_id = anuncio.get("id","")
+                        titulo_el  = anuncio.find("titulo")
+                        titulo_txt = (titulo_el.text or "").lower() if titulo_el is not None else ""
+
+                        if not any(act in titulo_txt for act in _INTERESTING_ACTS):
                             continue
 
-                        # Check it's a Madrid entity
-                        _madrid_terms = ["madrid","getafe","alcalá","móstoles",
-                                         "leganés","alcobendas","pozuelo","majadahonda"]
-                        # (BORME entries don't always have province in title — keep all
-                        # construction companies for now, the promotor DB enriches later)
+                        # Get company name from the anuncio text
+                        # In BORME XML, the company name is usually the first line of <texto>
+                        texto_el = anuncio.find("texto")
+                        empresa  = ""
+                        if texto_el is not None and texto_el.text:
+                            # First word-group before "." or ":" is usually the company name
+                            t = texto_el.text.strip()
+                            empresa = t.split(".")[0].split(":")[0].strip()[:80]
+                        else:
+                            empresa = titulo_el.text if titulo_el is not None else anuncio_id
 
-                        items = em.get("items", {}).get("item", [])
-                        if not isinstance(items, list): items = [items]
+                        # Filter: construction/promotor sector keywords
+                        emp_lower = empresa.lower()
+                        if not any(ct in emp_lower for ct in _CONSTRUCT_TERMS):
+                            continue
 
-                        for item in items:
-                            item_txt = str(item.get("@url","") or item.get("#text","") or "")
-                            results.append({
-                                "company":  em_name,
-                                "date":     d.strftime("%Y-%m-%d"),
-                                "borme_id": item_txt,
-                            })
+                        pdf_el  = anuncio.find("url_pdf")
+                        borme_link = ""
+                        if pdf_el is not None and pdf_el.text:
+                            borme_link = (f"https://www.boe.es/{pdf_el.text.lstrip('/')}"
+                                          if not pdf_el.text.startswith("http") else pdf_el.text)
 
-        except Exception:
-            pass
+                        results.append({
+                            "company":  empresa,
+                            "date":     d.strftime("%Y-%m-%d"),
+                            "act":      titulo_txt.title(),
+                            "borme_id": anuncio_id,
+                            "url":      borme_link,
+                        })
+
+        except Exception as e:
+            err_str = str(e)
+            if "ConnectionError" in type(e).__name__ or "MaxRetry" in err_str:
+                _consec_err += 1
+            # Silently skip individual day errors
 
         d += timedelta(days=1)
+        time.sleep(0.5)
 
     return results
 
@@ -4640,7 +4689,7 @@ def run():
     date_from = today - timedelta(weeks=WEEKS_BACK)
 
     log("=" * 70)
-    log(f"🏗️  PlanningScout Madrid — Engine v16 (179munis+BORME-S8+logistics40+dedup-fix+AI-kiloutou)")
+    log(f"🏗️  PlanningScout Madrid — Engine v17 (no-openpyxl+BORME-www+S2indent+word-boundary-muni)")
     log(f"📅  {today.strftime('%Y-%m-%d %H:%M')}  |  Mode: {MODE.upper()}")
     log(f"📆  {date_from.strftime('%d/%m/%Y')} → {date_to.strftime('%d/%m/%Y')} ({WEEKS_BACK}w)")
     log(f"⚙️  {N_WORKERS} processing workers  |  ⏱️ Budget: {MAX_RUN_MINUTES}min")
@@ -4715,13 +4764,12 @@ def run():
         # Section II (CM-level plans) — scan every day in daily mode, every 3rd in weekly/full
         step = 1 if MODE == "daily" else 3
         for day in scan_days[::step]:
-            
-                if not time_ok(need_s=60): break
-                day_urls = scrape_day_section(day, sec=SECTION_II, global_seen=global_seen)
-                added    = sum(1 for u in day_urls if add_url(u))
-                if added > 0:
-                    log(f"  📅 {day.strftime('%d/%m/%Y')} [II]: +{added}"); day_total += added
-                time.sleep(0.4)
+            if not time_ok(need_s=60): break
+            day_urls = scrape_day_section(day, sec=SECTION_II, global_seen=global_seen)
+            added    = sum(1 for u in day_urls if add_url(u))
+            if added > 0:
+                log(f"  📅 {day.strftime('%d/%m')} [II]: +{added}"); day_total += added
+            time.sleep(0.4)
 
         log(f"  Day scan total: +{day_total} | {len(all_urls)} unique")
 
@@ -4925,16 +4973,17 @@ def run():
         if MODE in ("weekly","full") and time_ok(need_s=60):
             log(f"\n{'─'*55}")
             log("📋 SOURCE 8: BORME (nuevas empresas constructoras/promotoras)")
-            borme_items = search_borme_new_companies(date_from, date_to)
-            if borme_items:
-                log(f"  📋 BORME: {len(borme_items)} new construction companies detected")
-                for item in borme_items[:20]:   # cap at 20 to avoid noise
-                    company = item.get("company","")
-                    date_s  = item.get("date","")
-                    borme_id= item.get("borme_id","")
-                    log(f"    🏢 {company} ({date_s})")
-            else:
-                log("  📋 BORME: no new construction companies in date range")
+            log("   Using www.boe.es/diario_borme/xml.php (same server as working BOE source)")
+            try:
+                borme_items = search_borme_new_companies(date_from, date_to)
+                if borme_items:
+                    log(f"  📋 BORME: {len(borme_items)} new construction companies")
+                    for item in borme_items[:15]:
+                        log(f"    🏢 {item.get('company','')[:50]} | {item.get('act','')[:30]} | {item.get('date','')}")
+                else:
+                    log("  📋 BORME: no new construction companies in date range")
+            except Exception as _be:
+                log(f"  ⚠️ BORME: {_be}")
 
         # ── Remove already-seen from the collected BOCM queue ──────────────────
         all_urls = [u for u in all_urls
@@ -5839,11 +5888,27 @@ def search_datos_madrid(date_from, date_to, global_seen):
             numero = str(int(float(numero))) if numero and numero != "nan" else ""
         except Exception:
             numero = ""
-        dist     = str(row_dict.get("Descripción Distrito","") or "").strip()
-        barrio   = str(row_dict.get("Descripción Barrio","")   or "").strip()
-        addr     = " ".join(filter(None, [tipo_via, nombre, numero])).strip()
+        dist     = str(row_dict.get("Descripción Distrito","") or "").strip().title()
+        barrio   = str(row_dict.get("Descripción Barrio","")   or "").strip().title()
+        uso      = str(row_dict.get("Uso","")                  or "").strip()
+        addr     = " ".join(filter(None, [tipo_via, nombre, numero])).strip().title()
         if dist:  addr += f", {dist}"
         if barrio and barrio != dist: addr += f" ({barrio})"
+
+        # GPS coordinates — use Latitud/Longitud if available (from XLSX columns)
+        _lat_raw = str(row_dict.get("Latitud","") or "").strip()
+        _lon_raw = str(row_dict.get("Longitud","") or "").strip()
+        _lat_val = _lon_val = None
+        def _dms_to_dec(dms_str):
+            """Convert '40º27\'58.79'' N' → 40.465776"""
+            import re as _r
+            m = _r.search(r"(\d+)[º°](\d+)'([\d.]+)''?\s*([NSEW])", dms_str)
+            if not m: return None
+            d,mn,s,hemi = int(m.group(1)),int(m.group(2)),float(m.group(3)),m.group(4)
+            dec = d + mn/60 + s/3600
+            return -dec if hemi in ("S","W") else dec
+        if _lat_raw: _lat_val = _dms_to_dec(_lat_raw)
+        if _lon_raw: _lon_val = _dms_to_dec(_lon_raw)
 
         if not addr or addr.strip() in (",",""):
             return   # skip rows with no address
@@ -5917,19 +5982,77 @@ def search_datos_madrid(date_from, date_to, global_seen):
             log(f"     If this persists, set DATOS_MADRID_PROXY secret for reliable access")
         return []
 
-    # ── Parse XLSX ────────────────────────────────────────────────────────────
+    # ── Parse XLSX ─────────────────────────────────────────────────────────────
+    # Uses Python stdlib only (zipfile + xml.etree) — no openpyxl dependency.
+    # XLSX is a ZIP of XML files; xl/sharedStrings.xml holds strings,
+    # xl/worksheets/sheet1.xml holds cell references.
     if _used_url and _used_url.endswith(".xlsx"):
         try:
-            import io as _io
-            import openpyxl as _opx
-            wb = _opx.load_workbook(_io.BytesIO(_r_data.content), data_only=True)
-            ws = wb.active
-            headers = [str(cell.value or "").strip() for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+            import zipfile as _zf, io as _io
+            import xml.etree.ElementTree as _XE
+            _NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+            zf  = _zf.ZipFile(_io.BytesIO(_r_data.content))
+            nl  = zf.namelist()
+
+            # Read shared strings table
+            _ss: list = []
+            if "xl/sharedStrings.xml" in nl:
+                _ss_root = _XE.fromstring(zf.read("xl/sharedStrings.xml"))
+                for si in _ss_root.findall(f".//{{{_NS}}}si"):
+                    parts = si.findall(f".//{{{_NS}}}t")
+                    _ss.append("".join((p.text or "") for p in parts))
+
+            # Find first sheet
+            _ws_files = sorted(n for n in nl
+                                if n.startswith("xl/worksheets/sheet") and n.endswith(".xml"))
+            if not _ws_files:
+                raise ValueError("No worksheet found in XLSX")
+
+            _ws_root  = _XE.fromstring(zf.read(_ws_files[0]))
+            rows_raw  = _ws_root.findall(f".//{{{_NS}}}row")
+
+            def _cell_val(cell_el):
+                ct  = cell_el.get("t","")
+                v   = cell_el.find(f"{{{_NS}}}v")
+                if v is None or not v.text: return ""
+                if ct == "s":
+                    try:    return _ss[int(v.text)]
+                    except: return v.text
+                if ct == "inlineStr":
+                    t = cell_el.find(f".//{{{_NS}}}t")
+                    return t.text if t is not None else ""
+                # number/date — return raw text
+                return v.text
+
+            def _col_idx(ref):
+                """Convert column letter(s) to 0-based index: A→0, B→1, Z→25, AA→26"""
+                letters = "".join(c for c in ref if c.isalpha())
+                idx = 0
+                for c in letters:
+                    idx = idx * 26 + (ord(c.upper()) - 64)
+                return idx - 1
+
+            # First row = headers
+            headers_by_idx: dict = {}
+            if rows_raw:
+                for cell in rows_raw[0].findall(f"{{{_NS}}}c"):
+                    ref = cell.get("r","")
+                    if ref:
+                        headers_by_idx[_col_idx(ref)] = _cell_val(cell).strip()
+
             row_idx = 0
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                row_dict = dict(zip(headers, row))
-                _process_xlsx_row(row_dict, row_idx)
-                row_idx += 1
+            for row_el in rows_raw[1:]:
+                row_dict: dict = {}
+                for cell in row_el.findall(f"{{{_NS}}}c"):
+                    ref = cell.get("r","")
+                    if not ref: continue
+                    col = _col_idx(ref)
+                    hdr = headers_by_idx.get(col, f"col_{col}")
+                    row_dict[hdr] = _cell_val(cell).strip()
+                if any(row_dict.values()):
+                    _process_xlsx_row(row_dict, row_idx)
+                    row_idx += 1
             log(f"  🏛️ datos.madrid XLSX: {row_idx} rows scanned → {len(results)} leads")
         except Exception as e:
             log(f"  ⚠️ datos.madrid XLSX parse error: {e}")
