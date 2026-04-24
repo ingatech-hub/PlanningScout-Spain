@@ -238,6 +238,50 @@ if not st.session_state["authenticated"] and url_session:
         st.session_state["user_perfil"]   = _tok_perfil
         st.session_state["_session_tok"]  = url_session
 
+# ── Process in-card action links (toggle follow / set priority) ───────────────
+# These use ?s=SESSION&ps_action=toggle|setprio&exp=...&ue=...&tok=...
+# The ?s= is preserved so authentication survives the click.
+def _process_card_action():
+    _act    = st.query_params.get("ps_action","")
+    _a_exp  = st.query_params.get("exp","")
+    _a_ue   = st.query_params.get("ue","")
+    _a_tok  = st.query_params.get("tok","")
+    _a_pv   = st.query_params.get("pv","")
+    if not (_act and _a_exp and _a_ue and _a_tok):
+        return
+    try:
+        _email = base64.urlsafe_b64decode((_a_ue + "==").encode()).decode()
+        _secret = "ps-seguir-2026"
+        try: _secret = str(st.secrets.get("SEGUIR_SECRET","ps-seguir-2026"))
+        except: pass
+        _sig_data = f"{_email}:{_a_exp}:{_act}:{_a_pv}:{_secret}"
+        _expected = hashlib.sha256(_sig_data.encode()).hexdigest()[:20]
+        if _expected != _a_tok:
+            pass  # silently ignore bad tokens
+        elif _act == "toggle":
+            # Toggle follow state
+            _wl = load_watchlist(_email)
+            if _a_exp in _wl:
+                remove_from_watchlist(_email, _a_exp)
+                st.session_state.setdefault("just_removed", set()).add(_a_exp)
+                st.session_state.get("just_saved", set()).discard(_a_exp)
+            else:
+                add_to_watchlist(_email, {"expediente": _a_exp, "bocm_url": ""})
+                st.session_state.setdefault("just_saved", set()).add(_a_exp)
+                st.session_state.get("just_removed", set()).discard(_a_exp)
+            load_watchlist.clear()
+        elif _act == "setprio" and _a_pv in ("0","1","2","3"):
+            update_watchlist_row(_email, _a_exp, priority=int(_a_pv))
+        # Pop action params, keep ?s= session token intact
+        for _k in ("ps_action","exp","ue","tok","pv"):
+            st.query_params.pop(_k, None)
+        st.rerun()
+    except Exception:
+        for _k in ("ps_action","exp","ue","tok","pv"):
+            st.query_params.pop(_k, None)
+
+_process_card_action()
+
 # ── Transition intercept ── Must be FIRST content check after state init.
 # When _transitioning=True the previous cycle just authenticated the user.
 # Render ONLY a full-page spinner for this cycle, clear the flag, then rerun
@@ -833,6 +877,25 @@ def sc_pill(sc):
     return f'<span style="{s}">{e} {sc} / 100</span>'
 
 
+def _card_action_url(action: str, email: str, exp: str, sess_tok: str, pv: str = "") -> str:
+    """
+    Build a signed URL for an in-card action link.
+    Includes the current ?s= session token so auth is preserved on click.
+    Signature: HMAC over email:exp:action:pv:secret
+    """
+    _secret = "ps-seguir-2026"
+    try: _secret = str(st.secrets.get("SEGUIR_SECRET","ps-seguir-2026"))
+    except: pass
+    _sig_data = f"{email}:{exp}:{action}:{pv}:{_secret}"
+    _tok = hashlib.sha256(_sig_data.encode()).hexdigest()[:20]
+    _ue  = base64.urlsafe_b64encode(email.encode()).decode().rstrip("=")
+    _exp_q = urllib.parse.quote(exp)
+    base = f"?s={urllib.parse.quote(sess_tok)}&ps_action={action}&exp={_exp_q}&ue={_ue}&tok={_tok}"
+    if pv:
+        base += f"&pv={pv}"
+    return base
+
+
 # ── Compact score circle for list rows ───────────────────────
 _SC_COL = {True: "#15803d", False: "#b45309"}   # high / mid
 def _score_circle(sc: int) -> str:
@@ -950,7 +1013,8 @@ def build_compact_row(row: dict, full_card_html: str) -> str:
         f'</details>'
     )
 
-def build_card(row, is_watched=False, inside_details=False):
+def build_card(row, is_watched=False, inside_details=False,
+               toggle_href="", prio_val="0", prio_hrefs=None):
     """
     Build one lead card with ONLY inline styles.
     This guarantees correct rendering regardless of Streamlit's Markdown parser.
@@ -1199,21 +1263,54 @@ def build_card(row, is_watched=False, inside_details=False):
         f'&body={html_lib.escape("Municipio: " + muni + chr(10) + "Dirección: " + addr + chr(10) + "Expediente: " + expd + chr(10) + "URL: " + bocm)}'
     )
 
-    # ── Seguir — purely visual inside card footer ─────────────────────────────
-    # is_watched=True  → static green "🔔 Siguiendo" pill (no click needed in list)
-    # is_watched=False → empty (real st.button renders just below the card, compact)
-    _SBT_SEGUIR = (
-        f"{_F};display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;"
-        f"padding:4px 11px;border-radius:7px;white-space:nowrap;"
+    # ── In-card Seguir toggle — <a href> preserves ?s= session token ────────────
+    # is_watched + toggle_href → green "🔔 Siguiendo" (click = unfollow)
+    # not watched + toggle_href → navy "🔔 Seguir"   (click = follow)
+    _SBT_CARD = (
+        f"{_F};display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;"
+        f"padding:5px 12px;border-radius:7px;text-decoration:none;white-space:nowrap;"
     )
-    if is_watched:
-        _seguir_el = (
-            f'<span style="{_SBT_SEGUIR}color:#16a34a;background:#f0fdf4;'
-            f'border:1.5px solid #bbf7d0;cursor:default;" title="Siguiendo este proyecto">'
-            f'🔔 Siguiendo</span>'
-        )
+    if toggle_href:
+        if is_watched:
+            _seguir_el = (
+                f'<a href="{toggle_href}" title="Clic para dejar de seguir" '
+                f'style="{_SBT_CARD}color:#16a34a;background:#f0fdf4;border:1.5px solid #bbf7d0;">'
+                f'🔔 Siguiendo</a>'
+            )
+        else:
+            _seguir_el = (
+                f'<a href="{toggle_href}" title="Seguir este proyecto y recibir alertas" '
+                f'style="{_SBT_CARD}color:#1e3a5f;background:#fff;border:1.5px solid #1e3a5f;">'
+                f'🔔 Seguir</a>'
+            )
     else:
-        _seguir_el = ""  # st.button("🔔 Seguir") renders compact below card
+        _seguir_el = ""
+
+    # ── In-card Priority selector — 3 tiny <a href> circles ───────────────────
+    _prio_colors = {
+        "1": ("#dc2626","#fef2f2","#fecaca"),
+        "2": ("#d97706","#fffbeb","#fde68a"),
+        "3": ("#2563eb","#eff6ff","#bfdbfe"),
+    }
+    if prio_hrefs is None: prio_hrefs = {}
+    _prio_els = []
+    for _pnum, (_pfc, _pfb, _pfbd) in _prio_colors.items():
+        _is_active = prio_val == _pnum
+        _p_href = prio_hrefs.get(_pnum, "")
+        _p_style = (
+            f"{_F};display:inline-flex;align-items:center;justify-content:center;"
+            f"width:24px;height:24px;border-radius:50%;font-size:10px;font-weight:700;"
+            f"text-decoration:none;"
+            + (f"background:{_pfc};color:#fff;" if _is_active else f"background:{_pfb};color:{_pfc};border:1px solid {_pfbd};")
+        )
+        _el = (f'<a href="{_p_href}" style="{_p_style}" title="Prioridad {_pnum}">P{_pnum}</a>'
+               if _p_href else
+               f'<span style="{_p_style}cursor:default;">P{_pnum}</span>')
+        _prio_els.append(_el)
+    _prio_group = (
+        f'<div style="display:inline-flex;align-items:center;gap:3px;'
+        f'background:#f1f5f9;border-radius:20px;padding:3px 5px;">{"".join(_prio_els)}</div>'
+    ) if toggle_href else ""
 
     _reportar_el = (
         f'<a href="{_mailto}" style="{_F};display:inline-flex;align-items:center;gap:3px;'
@@ -1226,8 +1323,9 @@ def build_card(row, is_watched=False, inside_details=False):
         f'<div style="{SFO}">'
         + "".join(links)
         + f'<span style="{SNO}">{_src_label}</span>'
+        + (_prio_group + " " if _prio_group else "")
         + _seguir_el
-        + _reportar_el
+        + " " + _reportar_el
         + '</div>'
     )
 
@@ -2330,40 +2428,40 @@ with _tab_leads:
                     _exp = f"BOCM-{abs(hash(_bocm_raw)) % 10**10}"
             _already = (_exp in _watched_set) if _exp else False
 
-            # ── Compact row (click to expand) — passes is_watched and inside_details=True
-            # inside_details=True suppresses duplicate header/ref/title in expanded card
-            _full_html = build_card(row.to_dict(), is_watched=_already, inside_details=True)
-            st.markdown(build_compact_row(row.to_dict(), _full_html), unsafe_allow_html=True)
+            # ── Compact row (click to expand full card) ──────────────────────────
+            # Build action URLs for in-card Seguir toggle and Priority buttons.
+            # The ?s= session token is embedded so auth survives the click.
+            _sess = st.session_state.get("_session_tok","")
+            _t_href   = ""
+            _p_hrefs  = {}
+            _pv_now   = "0"  # current priority for this lead (from watchlist)
+            if _exp and _is_real_user and _sess:
+                _t_href  = _card_action_url("toggle", _u, _exp, _sess)
+                _p_hrefs = {
+                    pv: _card_action_url("setprio", _u, _exp, _sess, pv=pv)
+                    for pv in ("1","2","3","0")
+                }
+                # Current priority from watchlist (if saved)
+                if _exp in _watched_set:
+                    try:
+                        _wl_full_tmp = load_watchlist_full(_u)
+                        for _wr in _wl_full_tmp:
+                            if str(_wr.get("expediente","")).strip() == _exp:
+                                _pv_now = str(_wr.get("priority","0") or "0").strip() or "0"
+                                break
+                    except Exception:
+                        pass
 
-            # ── Seguir button — compact, right-aligned, only when not already following
-            # When _already=True, green Siguiendo shown inside card footer HTML (no external btn needed)
-            if _exp and _is_real_user:
-                _safe_k = re.sub(r'[^a-zA-Z0-9_]', '_', _exp)
-                if not _already:
-                    _sp, _sc = st.columns([8, 1])
-                    with _sc:
-                        if st.button("🔔 Seguir", key=f"sv_{_safe_k}",
-                                     help="Guardar alerta para este proyecto",
-                                     use_container_width=True):
-                            _ok = add_to_watchlist(_u, row.to_dict())
-                            if _ok:
-                                st.session_state["just_saved"].add(_exp)
-                                st.session_state["just_removed"].discard(_exp)
-                                st.toast("🔔 Guardado en Mis alertas.", icon="✅")
-                            else:
-                                st.toast("❌ Error guardando. Inténtalo de nuevo.")
-                            st.rerun()
-                else:
-                    # Followed: show compact remove button right-aligned
-                    _sp, _sc = st.columns([8, 1])
-                    with _sc:
-                        if st.button("✕", key=f"rm_{_safe_k}",
-                                     help="Dejar de seguir este proyecto",
-                                     use_container_width=True):
-                            remove_from_watchlist(_u, _exp)
-                            st.session_state["just_removed"].add(_exp)
-                            st.session_state["just_saved"].discard(_exp)
-                            st.rerun()
+            _full_html = build_card(
+                row.to_dict(),
+                is_watched=_already,
+                inside_details=True,
+                toggle_href=_t_href,
+                prio_val=_pv_now,
+                prio_hrefs=_p_hrefs,
+            )
+            st.markdown(build_compact_row(row.to_dict(), _full_html), unsafe_allow_html=True)
+            # No external st.button() needed — all actions are inside the card HTML
 
 # ── TAB 2: INTERACTIVE MAP ───────────────────────────────────
 with _tab_mapa:
@@ -2511,31 +2609,26 @@ with _tab_alertas:
                         "fase": _wr.get("phase_at_add",""),
                         "tipo": "",
                     }
-                st.markdown(build_card(_card_row, is_watched=False, inside_details=False), unsafe_allow_html=True)
-
-                # ── Controls: [spacer] [P1/P2/P3 selectbox] [✕ Dejar de seguir] ─
-                # Priority on the RIGHT as compact P1/P2/P3 pill
-                _rw1, _rw2, _rw3 = st.columns([4, 2, 2])
-                with _rw2:
-                    _PRIO_SHORT = {"0":"— prioridad","1":"🔴 P1","2":"🟠 P2","3":"🟡 P3"}
-                    _new_pv = st.selectbox(
-                        "P", options=["0","1","2","3"],
-                        format_func=lambda p: _PRIO_SHORT[p],
-                        index=["0","1","2","3"].index(_pv),
-                        key=f"prio_{_safe_k}", label_visibility="collapsed",
-                    )
-                    if _new_pv != _pv:
-                        update_watchlist_row(_ua, _exp_s, priority=int(_new_pv))
-                        load_watchlist.clear(); st.rerun()
-                with _rw3:
-                    if st.button("✕ Dejar de seguir", key=f"rm_al_{_safe_k}",
-                                 use_container_width=True):
-                        remove_from_watchlist(_ua, _exp_s)
-                        st.session_state.setdefault("just_removed", set()).add(_exp_s)
-                        st.session_state.get("just_saved", set()).discard(_exp_s)
-                        st.session_state["alert_notes_local"].pop(_exp_s, None)
-                        st.session_state["alert_notes_saved_ok"].discard(_exp_s)
-                        load_watchlist.clear(); st.rerun()
+                # Build in-card action URLs for Mis Alertas cards too
+                _sess_al  = st.session_state.get("_session_tok","")
+                _t_href_al = ""
+                _p_hrefs_al = {}
+                if _sess_al:
+                    _t_href_al  = _card_action_url("toggle", _ua, _exp_s, _sess_al)
+                    _p_hrefs_al = {
+                        pv: _card_action_url("setprio", _ua, _exp_s, _sess_al, pv=pv)
+                        for pv in ("1","2","3","0")
+                    }
+                st.markdown(build_card(
+                    _card_row,
+                    is_watched=True,   # always True in Mis Alertas (these are saved projects)
+                    inside_details=False,
+                    toggle_href=_t_href_al,
+                    prio_val=_pv,
+                    prio_hrefs=_p_hrefs_al,
+                ), unsafe_allow_html=True)
+                # No external priority selectbox or Dejar de seguir button needed
+                # — both are now handled by in-card <a href> action links
 
                 # Notes — collapsible expander, full text_area so long notes are always readable
                 _note_label = (
