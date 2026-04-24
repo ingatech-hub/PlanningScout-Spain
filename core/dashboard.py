@@ -1026,6 +1026,40 @@ def build_card(row, is_watched=False):
         q = html_lib.unescape(prom).replace(" ", "+")
         links.append(f'<a href="https://www.linkedin.com/search/results/all/?keywords={html_lib.escape(q)}" target="_blank" rel="noopener" style="{SBT}">🔍 Promotor</a>')
 
+    # ── Footer buttons: BOCM · Mapa · PDF · Promotor · [Seguir/Siguiendo] · source · Reportar
+    # Seguir and Reportar live exclusively here — nothing outside the card.
+    _src_label = "BOE" if bocm and (bocm.lower().startswith("https://www.boe.es") or bocm.lower().startswith("https://boe.es")) else "BOCM"
+    _mailto = (
+        f'mailto:info@planningscout.com'
+        f'?subject={html_lib.escape("Lead: " + muni + " — " + (expd or ref_str[:30]))}'
+        f'&body={html_lib.escape("Municipio: " + muni + chr(10) + "Dirección: " + addr + chr(10) + "Expediente: " + expd + chr(10) + "URL: " + bocm)}'
+    )
+
+    # ── Seguir state — NO visual in card HTML for is_watched.
+    # The st.button("🔔 Siguiendo") rendered after the card IS the indicator.
+    # Having both the green span AND the button = the "duplicate" users saw.
+    # Card footer shows nothing for seguir state — button below card handles it.
+    _seguir_el = ""  # intentionally empty — st.button handles all seguir UI
+
+    _reportar_el = (
+        f'<a href="{_mailto}" style="{_F};display:inline-flex;align-items:center;gap:3px;'
+        f'font-size:11px;font-weight:500;color:#94a3b8;background:#f8fafc;border:1px solid #e2e8f0;'
+        f'padding:4px 9px;border-radius:7px;text-decoration:none;white-space:nowrap;" '
+        f'title="Reportar error o pedir más info">✉️ Reportar</a>'
+    )
+
+    footer = (
+        f'<div style="{SFO}">'
+        + "".join(links)
+        + _seguir_el
+        + f'<span style="{SNO}">{_src_label}</span>'
+        + _reportar_el
+        + '</div>'
+    )
+
+
+    extras_html = ""
+
     # ── Key Contacts (Apollo enrichment) ─────────────────────────────────────
     _raw_kc = str(row.get("key_contacts", "") or "").strip()
     _raw_aw = str(row.get("action_window", "") or "").strip()
@@ -1063,37 +1097,6 @@ def build_card(row, is_watched=False):
             + "</div>"
         )
 
-    # ── Footer buttons: BOCM · Mapa · PDF · Promotor · [Seguir/Siguiendo] · source · Reportar
-    # Seguir and Reportar live exclusively here — nothing outside the card.
-    _src_label = "BOE" if bocm and (bocm.lower().startswith("https://www.boe.es") or bocm.lower().startswith("https://boe.es")) else "BOCM"
-    _mailto = (
-        f'mailto:info@planningscout.com'
-        f'?subject={html_lib.escape("Lead: " + muni + " — " + (expd or ref_str[:30]))}'
-        f'&body={html_lib.escape("Municipio: " + muni + chr(10) + "Dirección: " + addr + chr(10) + "Expediente: " + expd + chr(10) + "URL: " + bocm)}'
-    )
-
-    # ── Seguir state — NO visual in card HTML for is_watched.
-    # The st.button("🔔 Siguiendo") rendered after the card IS the indicator.
-    # Having both the green span AND the button = the "duplicate" users saw.
-    # Card footer shows nothing for seguir state — button below card handles it.
-    _seguir_el = ""  # intentionally empty — st.button handles all seguir UI
-
-    _reportar_el = (
-        f'<a href="{_mailto}" style="{_F};display:inline-flex;align-items:center;gap:3px;'
-        f'font-size:11px;font-weight:500;color:#94a3b8;background:#f8fafc;border:1px solid #e2e8f0;'
-        f'padding:4px 9px;border-radius:7px;text-decoration:none;white-space:nowrap;" '
-        f'title="Reportar error o pedir más info">✉️ Reportar</a>'
-    )
-
-    footer = (
-        f'<div style="{SFO}">'
-        + "".join(links)
-        + _seguir_el
-        + f'<span style="{SNO}">{_src_label}</span>'
-        + _reportar_el
-        + '</div>'
-    )
-
 
     # ── AI Evaluation — dropdown, same style as old Descripción dropdown ──
     # Phase (col Q) shown as a tag row below.
@@ -1104,8 +1107,6 @@ def build_card(row, is_watched=False):
         "list-style:none;border-top:1px solid #f1f5f9;background:#fff;"
     )
     _DIV = "padding:4px 20px 16px 20px;"
-    extras_html = ""
-
     ai_val = str(row.get("ai_evaluation", "") or row.get("AI Evaluation", "") or "").strip()
     if ai_val and ai_val.lower() not in ("nan", "none", ""):
         ai_e = _html_esc.escape(ai_val[:600])
@@ -1129,6 +1130,8 @@ def build_card(row, is_watched=False):
         "primera_ocupacion": ("⚪", "1ª Ocupación",           "#f8fafc", "#64748b", "#e2e8f0"),
         "en_tramite":        ("🟠", "En trámite",             "#fff7ed", "#c2410c", "#fed7aa"),
         "solicitud":         ("⚡", "Pre-lead · En solicitud","#fffbeb", "#b45309", "#fde68a"),
+        "adjudicacion":      ("🏆", "Adjudicación",           "#f0f9ff", "#0369a1", "#bae6fd"),
+        "en_obra":           ("🏗️", "En obra",                "#eff4fb", "#1e3a5f", "#bfdbfe"),
     }
     if fase_val and fase_val in _FASE_LABELS:
         fi, ft, fb, fc, fbd = _FASE_LABELS[fase_val]
@@ -1250,43 +1253,42 @@ def _geocode_nominatim(query):
 # Madrid municipality centroids — instant fallback when address geocoding fails.
 # Covers the most common BOCM municipalities for retail/expansion profiles.
 _MUNI_CENTROIDS = {
-    "madrid":              (40.4168, -3.7038),
-    "alcalá de henares":   (40.4818, -3.3647),
-    "alcobendas":          (40.5499, -3.6414),
-    "alcorcón":            (40.3490, -3.8242),
-    "algete":              (40.5956, -3.4965),
-    "arganda del rey":     (40.3015, -3.4422),
-    "aranjuez":            (40.0332, -3.6019),
-    "boadilla del monte":  (40.4071, -3.8759),
-    "brunete":             (40.4014, -3.9976),
-    "collado villalba":    (40.6330, -4.0046),
-    "coslada":             (40.4227, -3.5650),
-    "fuenlabrada":         (40.2839, -3.7982),
-    "galapagar":           (40.5761, -4.0048),
-    "getafe":              (40.3053, -3.7326),
-    "humanes de madrid":   (40.2593, -3.8270),
+    "madrid": (40.4168, -3.7038),
+    "alcalá de henares": (40.4818, -3.3647),
+    "alcobendas": (40.5499, -3.6414),
+    "alcorcón": (40.3490, -3.8242),
+    "algete": (40.5956, -3.4965),
+    "arganda del rey": (40.3015, -3.4422),
+    "aranjuez": (40.0332, -3.6019),
+    "boadilla del monte": (40.4071, -3.8759),
+    "brunete": (40.4014, -3.9976),
+    "collado villalba": (40.6330, -4.0046),
+    "coslada": (40.4227, -3.5650),
+    "fuenlabrada": (40.2839, -3.7982),
+    "galapagar": (40.5761, -4.0048),
+    "getafe": (40.3053, -3.7326),
+    "humanes de madrid": (40.2593, -3.8270),
     "las rozas de madrid": (40.4933, -3.8728),
-    "leganés":             (40.3283, -3.7640),
-    "majadahonda":         (40.4734, -3.8718),
-    "mejorada del campo":  (40.3961, -3.4920),
-    "móstoles":            (40.3220, -3.8642),
-    "navalcarnero":        (40.2851, -4.0127),
+    "leganés": (40.3283, -3.7640),
+    "majadahonda": (40.4734, -3.8718),
+    "mejorada del campo": (40.3961, -3.4920),
+    "móstoles": (40.3220, -3.8642),
+    "navalcarnero": (40.2851, -4.0127),
     "paracuellos de jarama": (40.5065, -3.5271),
-    "parla":               (40.2381, -3.7760),
-    "pinto":               (40.2427, -3.6974),
-    "pozuelo de alarcón":  (40.4349, -3.8131),
-    "rivas-vaciamadrid":   (40.3556, -3.5218),
+    "parla": (40.2381, -3.7760),
+    "pinto": (40.2427, -3.6974),
+    "pozuelo de alarcón": (40.4349, -3.8131),
+    "rivas-vaciamadrid": (40.3556, -3.5218),
     "san fernando de henares": (40.4245, -3.5368),
     "san sebastián de los reyes": (40.5534, -3.6281),
-    "torrejón de ardoz":   (40.4586, -3.4795),
-    "tres cantos":         (40.5951, -3.7078),
-    "valdemoro":           (40.1910, -3.6747),
+    "torrejón de ardoz": (40.4586, -3.4795),
+    "tres cantos": (40.5951, -3.7078),
+    "valdemoro": (40.1910, -3.6747),
     "velilla de san antonio": (40.3774, -3.5115),
     "villanueva de la cañada": (40.4521, -3.9849),
     "villanueva del pardillo": (40.4748, -3.9354),
     "ajalvir": (40.5415, -3.4632),
     "becerril de la sierra": (40.7188, -3.8906),
-    "brunete": (40.4014, -3.9976),
     "buitrago del lozoya": (40.9988, -3.6352),
     "casarrubuelos": (40.2020, -3.8890),
     "ciempozuelos": (40.1600, -3.6215),
@@ -1296,10 +1298,7 @@ _MUNI_CENTROIDS = {
     "el molar": (40.7158, -3.5879),
     "fuente el saz de jarama": (40.6235, -3.4856),
     "griñón": (40.2125, -3.8684),
-    "humanes de madrid": (40.2593, -3.8270),
     "meco": (40.5530, -3.3350),
-    "mejorada del campo": (40.3961, -3.4920),
-    "paracuellos de jarama": (40.5065, -3.5271),
     "quijorna": (40.4168, -3.9900),
     "robledo de chavela": (40.5068, -4.2424),
     "san agustín del guadalix": (40.7107, -3.6171),
@@ -1311,6 +1310,7 @@ _MUNI_CENTROIDS = {
     "villa del prado": (40.2762, -4.2777),
     "villalbilla": (40.4284, -3.3017),
     "villaviciosa de odón": (40.3556, -3.9003),
+
 }
 
 def _get_coords(row):
@@ -1562,7 +1562,7 @@ def load_data():
             "https://www.googleapis.com/auth/drive",
         ])
         gc = gspread.authorize(creds)
-        ws = gc.open_by_key(st.secrets.get("SHEET_ID", SHEET_ID)).worksheet("Permits")
+        ws = gc.open_by_key(st.secrets.get("SHEET_ID", SHEET_ID)).worksheet("Leads")
         data = ws.get_all_records()
         return pd.DataFrame(data) if data else pd.DataFrame()
     except Exception as ex:
@@ -2176,6 +2176,11 @@ with _tab_leads:
 
             # ── Seguir / Siguiendo st.button — never <a href> ────────────────
             # st.button → server-side rerun → session_state intact → no logout
+            # Fallback: if expediente empty, use BOCM date-ID as unique key
+            if not _exp:
+                _bfb = str(row.get("bocm_url","") or "")
+                _bid = re.search(r'BOCM[-_](\d{8})', _bfb, re.I)
+                if _bid: _exp = f"BOCM-{_bid.group(1)}"
             if _exp and _is_real_user:
                 _safe_k = re.sub(r'[^a-zA-Z0-9_]', '_', _exp)
                 _sc, _sp = st.columns([1, 7])
@@ -2342,7 +2347,9 @@ with _tab_alertas:
                 _pem_s= (f"€{_pem_v/1_000_000:.1f}M" if _pem_v>=1_000_000
                          else f"€{int(_pem_v/1000)}K" if _pem_v>=1000 else "")
                 _fl   = {"definitivo":"🟢 Definitivo","inicial":"🟡 Inicial",
-                         "licitacion":"🔵 Licitación","primera_ocupacion":"⚪ 1ª Ocup."}.get(_fase,"")
+                         "licitacion":"🔵 Licitación","primera_ocupacion":"⚪ 1ª Ocup.",
+                         "adjudicacion":"🏆 Adjudicación","en_obra":"🏗️ En obra",
+                         "en_tramite":"🟠 En trámite","solicitud":"⚡ Solicitud"}.get(_fase,"")
 
                 # ── Card container ────────────────────────────────────────────
                 _bc = f"border-left:4px solid {_pfc};" if _pv != "0" else ""
