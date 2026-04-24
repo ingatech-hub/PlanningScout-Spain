@@ -1814,9 +1814,13 @@ def load_watchlist(user_email: str) -> list:
         return []
 
 
-@st.cache_data(ttl=60)
+# NO @st.cache_data here — this function must always return fresh data.
+# Caching it (even with .clear()) causes a same-rerun stale-read bug in Streamlit Cloud:
+# after add_to_watchlist writes to sheet and calls .clear(), a subsequent call in the
+# SAME rerun cycle can still return the pre-write cached value. For a small per-user
+# list this uncached call costs ~0.3s which is acceptable.
 def load_watchlist_full(user_email: str) -> list:
-    """Load full watchlist rows (including notes, priority) for Mis Alertas tab."""
+    """Load full watchlist rows (notes + priority) for Mis Alertas tab. Always fresh."""
     try:
         ss = _get_sheet_connection()
         if not ss: return []
@@ -1855,9 +1859,9 @@ def add_to_watchlist(user_email: str, row: dict) -> bool:
         for r in existing:
             if (r.get("email","").lower() == user_email.lower() and
                     str(r.get("expediente","")).strip() == exp):
-                load_watchlist.clear(); load_watchlist_full.clear(); return True
+                load_watchlist.clear(); return True  # already exists, _full uncached
         ws.append_row([user_email, bocm, exp, today, fase, "", muni, desc, "", "0"])
-        load_watchlist.clear(); load_watchlist_full.clear()
+        load_watchlist.clear()  # clear only the expediente-list cache; _full is uncached
         return True
     except Exception:
         return False
@@ -1890,7 +1894,7 @@ def update_watchlist_row(user_email: str, expediente: str,
                     row[xcol-1].strip() == expediente.strip()):
                 if notes    is not None: ws.update_cell(i, ncol, notes)
                 if priority is not None: ws.update_cell(i, pcol, str(priority))
-                load_watchlist_full.clear(); return True
+                return True  # _full is uncached so next call always fresh
         return False
     except Exception:
         return False
@@ -1913,7 +1917,7 @@ def remove_from_watchlist(user_email: str, expediente: str) -> bool:
                   and row[ecol-1].lower() == user_email.lower()
                   and row[xcol-1].strip() == expediente.strip()]
         for idx in reversed(to_del): ws.delete_rows(idx)
-        load_watchlist.clear(); load_watchlist_full.clear()
+        load_watchlist.clear()  # _full is uncached
         return True
     except Exception:
         return False
@@ -2212,29 +2216,39 @@ with _tab_mapa:
 with _tab_alertas:
     _ua = st.session_state.get("user_email","")
     if not _ua or _ua.startswith("token:"):
-        st.info("Inicia sesión con tu email para ver y gestionar tus alertas guardadas.")
+        st.markdown("""
+<div style="text-align:center;padding:64px 24px;background:#fff;border:1.5px solid #e2e8f0;border-radius:14px;margin-top:8px;">
+  <div style="font-size:40px;margin-bottom:12px;">🔒</div>
+  <p style="font-size:14px;color:#64748b;margin:0;">Inicia sesión con tu email para gestionar tus alertas.</p>
+</div>""", unsafe_allow_html=True)
     else:
-        # ── Load full watchlist rows (notes + priority from sheet) ──────────────
+        # ── Session dicts for in-session note backup ─────────────────────────────
+        # These survive reruns within the session. On re-login, sheet values reload.
+        if "alert_notes_local"     not in st.session_state: st.session_state["alert_notes_local"] = {}
+        if "alert_notes_saved_ok"  not in st.session_state: st.session_state["alert_notes_saved_ok"] = set()
+
+        # ── Load full watchlist (ALWAYS fresh — no @st.cache_data on load_watchlist_full) ─
         _wl_full = load_watchlist_full(_ua)
+
         # Apply session-level removes/adds for instant feedback
+        _removed = st.session_state.get("just_removed", set())
         _wl_full = [r for r in _wl_full
-                    if str(r.get("expediente","")).strip()
-                    not in st.session_state.get("just_removed", set())]
-        _seen_in_full = {str(r.get("expediente","")).strip() for r in _wl_full}
+                    if str(r.get("expediente","")).strip() not in _removed]
+        _seen = {str(r.get("expediente","")).strip() for r in _wl_full}
         for _je in st.session_state.get("just_saved", set()):
-            if _je and _je not in _seen_in_full:
-                _wl_full.append({"expediente": _je, "notes":"", "priority":"0"})
+            _je = str(_je).strip()
+            if _je and _je not in _seen:
+                _wl_full.append({"expediente":_je, "notes":"", "priority":"0"})
+                _seen.add(_je)
 
         _PRIO = {
             "1": ("🔴", "Prioridad 1", "#fef2f2", "#dc2626", "#fecaca"),
             "2": ("🟠", "Prioridad 2", "#fff7ed", "#c2410c", "#fed7aa"),
             "3": ("🟡", "Prioridad 3", "#fefce8", "#a16207", "#fde68a"),
-            "0": ("",   "Sin prioridad","#fff",   "#94a3b8", "#e2e8f0"),
+            "0": ("",   "Sin prioridad", "#fff",  "#94a3b8", "#e2e8f0"),
         }
-        def _get_prio(r): return str(r.get("priority","0") or "0").strip() or "0"
-
-        # Sort by priority (1 first, then 2, then 3, then 0)
-        _wl_full.sort(key=lambda r: (0 if _get_prio(r) == "0" else -int(_get_prio(r))))
+        def _gprio(r): return str(r.get("priority","0") or "0").strip() or "0"
+        _wl_full.sort(key=lambda r: (0 if _gprio(r)=="0" else -int(_gprio(r))))
 
         if not _wl_full:
             st.markdown("""
@@ -2252,93 +2266,129 @@ with _tab_alertas:
                 f'{len(_wl_full)} proyecto{"s" if len(_wl_full)!=1 else ""} en seguimiento</p>',
                 unsafe_allow_html=True)
 
-            # Match to current sheet data
+            # Build index of leads data
             _df_idx = {}
             if "expediente" in df.columns:
-                for _, _r in df[df["expediente"].astype(str).str.strip().isin(
-                        {str(r.get("expediente","")).strip() for r in _wl_full})].iterrows():
+                for _, _r in df[df["expediente"].astype(str).str.strip().isin(_seen)].iterrows():
                     _k = str(_r.get("expediente","")).strip()
                     if _k: _df_idx[_k] = _r
 
             for _wr in _wl_full:
-                _exp_s  = str(_wr.get("expediente","") or "").strip()
+                _exp_s = str(_wr.get("expediente","") or "").strip()
                 if not _exp_s: continue
+
+                # Validate expediente looks real (filter garbled session-state artifacts)
+                if len(_exp_s) > 40 or _exp_s.isupper():
+                    continue
+
                 _safe_k = re.sub(r'[^a-zA-Z0-9_]', '_', _exp_s)
-                _pv     = _get_prio(_wr)
+                _pv     = _gprio(_wr)
                 _, _pl, _pbg, _pfc, _pbd = _PRIO.get(_pv, _PRIO["0"])
-                # Notes: prefer what's in the sheet row; fall back to session state
-                _note_from_sheet = str(_wr.get("notes","") or "")
-                _note_default    = _note_from_sheet  # sheet is truth after save
+
+                # Notes: sheet value is truth; session backup is fallback within session
+                _note_sheet   = str(_wr.get("notes","") or "")
+                _note_session = st.session_state["alert_notes_local"].get(_exp_s)
+                # Use session backup if it's newer than what's in the sheet
+                # (covers the window between save and sheet propagation)
+                _note_display = _note_session if (_note_session is not None) else _note_sheet
+                _note_saved_ok = _exp_s in st.session_state["alert_notes_saved_ok"]
 
                 _row  = _df_idx.get(_exp_s)
                 _muni = (str(_row.get("municipio","") or "") if _row is not None else "") or "—"
-                _tipo = (str(_row.get("tipo","") or "")      if _row is not None else "") or "—"
+                _tipo = (str(_row.get("tipo","")      or "") if _row is not None else "") or "—"
                 _pem_v= (_row.get("pem_combined",0)          if _row is not None else 0) or 0
                 _desc = (str(_row.get("descripcion","") or "")[:140] if _row is not None else "")
-                _bocm = (str(_row.get("bocm_url","") or "")   if _row is not None else "")
-                _fase = (str(_row.get("fase","") or "")        if _row is not None else "")
+                _bocm = (str(_row.get("bocm_url","")  or "") if _row is not None else "")
+                _fase = (str(_row.get("fase","")      or "") if _row is not None else "")
                 _pem_s= (f"€{_pem_v/1_000_000:.1f}M" if _pem_v>=1_000_000
                          else f"€{int(_pem_v/1000)}K" if _pem_v>=1000 else "")
                 _fl   = {"definitivo":"🟢 Definitivo","inicial":"🟡 Inicial",
                          "licitacion":"🔵 Licitación","primera_ocupacion":"⚪ 1ª Ocup."}.get(_fase,"")
 
-                # ── Card ──────────────────────────────────────────────────────
-                _bc = f"4px solid {_pfc}" if _pv != "0" else "1.5px solid #e2e8f0"
+                # ── Card container ────────────────────────────────────────────
+                _bc = f"border-left:4px solid {_pfc};" if _pv != "0" else ""
                 st.markdown(
-                    f'<div style="background:#fff;border:1.5px solid #e2e8f0;border-radius:14px;'
-                    f'border-left:{_bc};margin-bottom:6px;overflow:hidden;'
-                    f'box-shadow:0 2px 8px rgba(0,0,0,.05);">',
+                    f'<div style="background:#fff;border:1.5px solid #e2e8f0;{_bc}'
+                    f'border-radius:14px;margin-bottom:8px;overflow:hidden;'
+                    f'box-shadow:0 2px 10px rgba(0,0,0,.06);">',
                     unsafe_allow_html=True)
 
-                # Top row: info + priority picker
+                # ── Header: info left | priority picker right ─────────────────
                 _c1, _c2 = st.columns([6, 2])
                 with _c1:
                     st.markdown(
-                        f'<div style="padding:14px 0 8px 16px;">'
-                        f'<div style="font-size:11px;color:#94a3b8;font-family:\'JetBrains Mono\',monospace;margin-bottom:4px;">'
-                        f'{html_lib.escape(_muni)} · Exp. {html_lib.escape(_exp_s)}</div>'
-                        f'<div style="font-size:14px;font-weight:600;color:#0d1a2b;'
+                        f'<div style="padding:14px 0 10px 18px;">'
+                        f'<div style="font-size:11px;color:#94a3b8;font-family:\'JetBrains Mono\',monospace;'
+                        f'letter-spacing:.03em;margin-bottom:5px;">'
+                        f'{html_lib.escape(_muni)} &nbsp;·&nbsp; Exp. {html_lib.escape(_exp_s)}</div>'
+                        f'<div style="font-size:15px;font-weight:600;color:#0d1a2b;'
                         f'font-family:\'Fraunces\',Georgia,serif;line-height:1.35;margin-bottom:8px;">'
                         f'{html_lib.escape(_desc or _tipo)}</div>'
-                        + (f'<span style="font-size:11px;padding:2px 9px;border-radius:20px;'
-                           f'background:#eff4fb;color:#1e3a5f;border:1px solid #bfdbfe;'
-                           f'margin-right:6px;">{html_lib.escape(_tipo)}</span>' if _tipo != "—" else "")
+                        + (f'<span style="font-size:11px;padding:2px 10px;border-radius:20px;'
+                           f'background:#eff4fb;color:#1e3a5f;border:1px solid #bfdbfe;margin-right:6px;">'
+                           f'{html_lib.escape(_tipo)}</span>' if _tipo not in ("—","") else "")
                         + (f'<span style="font-size:13px;font-weight:700;color:#1e3a5f;">{_pem_s}</span>' if _pem_s else "")
                         + '</div>', unsafe_allow_html=True)
                 with _c2:
+                    st.markdown('<div style="padding:18px 18px 0 0;">', unsafe_allow_html=True)
                     _new_pv = st.selectbox("P", options=["0","1","2","3"],
                         format_func=lambda p: _PRIO[p][1],
                         index=["0","1","2","3"].index(_pv),
                         key=f"prio_{_safe_k}", label_visibility="collapsed")
                     if _new_pv != _pv:
                         update_watchlist_row(_ua, _exp_s, priority=int(_new_pv))
-                        load_watchlist_full.clear(); st.rerun()
+                        load_watchlist.clear(); st.rerun()
+                    st.markdown('</div>', unsafe_allow_html=True)
 
-                # Notes (persistent to sheet on change)
+                # ── Notes section ─────────────────────────────────────────────
                 st.markdown(
-                    '<div style="padding:0 16px 4px;">'
-                    '<div style="font-size:10px;font-weight:600;color:#94a3b8;'
-                    'text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">'
-                    'Mis notas (privadas)</div>', unsafe_allow_html=True)
-                _new_note = st.text_area("", value=_note_default,
+                    '<div style="padding:4px 18px 12px;">'
+                    '<div style="font-size:10px;font-weight:700;color:#94a3b8;'
+                    'text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px;">'
+                    'Mis notas (privadas)</div>',
+                    unsafe_allow_html=True)
+
+                _typed = st.text_area("",
+                    value=_note_display,
                     placeholder="Añade contexto, contactos, próximos pasos…",
-                    key=f"note_{_safe_k}", label_visibility="collapsed", height=68)
-                if _new_note != _note_default and _new_note.strip() != _note_from_sheet.strip():
-                    update_watchlist_row(_ua, _exp_s, notes=_new_note)
-                    load_watchlist_full.clear()
+                    key=f"note_{_safe_k}",
+                    label_visibility="collapsed", height=72)
+
+                # Save note button — explicit action prevents accidental saves
+                _note_col, _saved_col = st.columns([1, 3])
+                with _note_col:
+                    if st.button("💾 Guardar nota", key=f"savenote_{_safe_k}",
+                                 use_container_width=True):
+                        # 1. Persist to session immediately (survives rerun)
+                        st.session_state["alert_notes_local"][_exp_s] = _typed
+                        # 2. Write to sheet
+                        ok = update_watchlist_row(_ua, _exp_s, notes=_typed)
+                        if ok:
+                            st.session_state["alert_notes_saved_ok"].add(_exp_s)
+                            st.toast("✅ Nota guardada", icon="💾")
+                        else:
+                            st.toast("⚠️ Guardado local. Se sincronizará pronto.", icon="💾")
+                        st.rerun()
+                with _saved_col:
+                    if _note_saved_ok and _note_display:
+                        st.markdown(
+                            '<p style="font-size:11px;color:#16a34a;margin:6px 0 0;'
+                            'font-family:\'Plus Jakarta Sans\',system-ui;">✓ Nota guardada</p>',
+                            unsafe_allow_html=True)
+
                 st.markdown('</div>', unsafe_allow_html=True)
 
-                # Footer: BOCM link | fase | remove
+                # ── Footer: BOCM | fase badge | remove ───────────────────────
                 _fa, _fb, _fc = st.columns([2, 2, 2])
                 with _fa:
                     if _bocm: st.markdown(
-                        f'<div style="padding:8px 0 12px 16px;">'
+                        f'<div style="padding:4px 0 14px 18px;">'
                         f'<a href="{_bocm}" target="_blank" '
                         f'style="font-size:12px;font-weight:600;color:#1e3a5f;text-decoration:none;">↗ Ver BOCM</a>'
                         f'</div>', unsafe_allow_html=True)
                 with _fb:
                     if _fl: st.markdown(
-                        f'<div style="padding:10px 0;">'
+                        f'<div style="padding:6px 0 14px;">'
                         f'<span style="font-size:11px;color:#64748b;">{html_lib.escape(_fl)}</span>'
                         f'</div>', unsafe_allow_html=True)
                 with _fc:
@@ -2347,10 +2397,12 @@ with _tab_alertas:
                         remove_from_watchlist(_ua, _exp_s)
                         st.session_state.setdefault("just_removed", set()).add(_exp_s)
                         st.session_state.get("just_saved", set()).discard(_exp_s)
-                        st.rerun()
+                        st.session_state["alert_notes_local"].pop(_exp_s, None)
+                        st.session_state["alert_notes_saved_ok"].discard(_exp_s)
+                        load_watchlist.clear(); st.rerun()
 
                 st.markdown('</div>', unsafe_allow_html=True)
-                st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+                st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
 # ── Footer ──
 st.markdown(f"""
