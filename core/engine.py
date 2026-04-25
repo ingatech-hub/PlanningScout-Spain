@@ -509,6 +509,31 @@ KW_WEEKLY = [
     # Retail opening licences — location intelligence for warm leads
     ("licencia de apertura comercial",     SECTION_III,  3, "RET"),
     # Environmental clearance → major infra obra in 12-18 months
+    # ── New keywords for warm leads (coliving/actiu/kiloutou/molecor/kinépolis) ──
+    ("coliving",                              SECTION_III,  4, "HOSPE+PRO+RET"),
+    ("residencia de estudiantes",             SECTION_III,  4, "HOSPE+PRO+ACTIU"),
+    ("residencia de jóvenes",                 SECTION_III,  3, "HOSPE+PRO"),
+    ("uso hospedaje",                         SECTION_III,  4, "HOSPE"),
+    ("proyecto básico",                       SECTION_III,  4, "ACTIU+CON+PRO"),
+    ("certificado final de obra",             SECTION_III,  4, "ACTIU+MEP+HOSPE"),
+    ("dirección facultativa",                 SECTION_III,  3, "ACTIU+CON"),
+    ("acta de inicio de obras",               SECTION_III,  4, "ALQUILER+CON"),
+    ("orden de inicio de obra",               SECTION_III,  3, "ALQUILER+CON"),
+    ("inicio de ejecución",                   SECTION_III,  3, "ALQUILER+CON"),
+    ("red de distribución de agua",           SECTION_III,  4, "MAT+INFRA"),
+    ("instalación de tubería",                SECTION_III,  4, "MAT+INFRA+CON"),
+    ("colector de pluviales",                 SECTION_III,  4, "MAT+INFRA+CON"),
+    ("complejo de ocio",                      SECTION_III,  4, "RET+IND"),
+    ("equipamiento cultural",                 SECTION_III,  3, "RET+CON"),
+    ("plan especial de equipamiento comercial", SECTION_III,3, "RET+CON+PRO"),
+    ("propuesta de adjudicación",             SECTION_III,  4, "CON+INFRA+MAT"),
+    ("apertura de plicas",                    SECTION_III,  3, "CON+INFRA"),
+    ("mesa de contratación",                  SECTION_III,  3, "CON+INFRA"),
+    ("autorización de apertura",              SECTION_III,  4, "RET+HOSPE"),
+    ("expediente de actividad",               SECTION_III,  4, "RET+HOSPE+MEP"),
+    ("proyecto de compensación",              SECTION_III,  4, "PRO+CON"),
+    ("modificación puntual del pgou",         SECTION_III,  3, "PRO+CON"),
+
     ("declaración de impacto ambiental",   SECTION_III,  3, "INFRA+CON"),
         ("nave logística",                 SECTION_III,  5, "IND+MAT"),     # logistics warehouse
 ]
@@ -2293,6 +2318,17 @@ GRANT_SIGNALS = [
     "obras de reparación urgente",
     "ejecución de obras de",
     "formalización del contrato de obras",
+    # Kiloutou triggers — obra started = machinery needed today
+    "acta de inicio de obras",
+    "orden de inicio de obra",
+    "acta de replanteo",
+    "inicio de ejecución de",
+    # Actiu triggers — building ready = furnishing needed
+    "certificado final de obra",
+    "licencia de primera ocupación",
+    # Molecor / pipe suppliers
+    "colocación de tubería",
+    "instalación de colector",
 ]
 CONSTRUCTION_SIGNALS = [
     "obra mayor", "obras mayores", "licencia de obras",
@@ -2368,6 +2404,12 @@ CONSTRUCTION_SIGNALS = [
     # Promotores
     "segregación de finca", "normalización de fincas",
     "proyecto de actuación especial",
+
+    # Molecor — PVC pipe supplier signals
+    "tubería", "tuberías", "tubería de pvc", "instalación de tubería",
+    "red de distribución", "colector de pluviales", "tubería de fundición",
+    # Kiloutou — machinery rental signals (obra started)
+    "acta de inicio", "orden de inicio", "certificado de inicio",
 ]
 
 SMALL_ACTIVITY = [
@@ -2636,6 +2678,9 @@ def score_lead(p):
         "apartamentos turísticos", "viviendas de uso turístico", "uso hotelero",
         "residencia de estudiantes", "edificio plurifamiliar", "edificio de viviendas",
         "primera ocupación",
+        # Sharing Co additions
+        "coliving", "flexliving", "residencia de jóvenes", "alojamiento temporal",
+        "residencia universitaria",
     ]
     if any(k in desc for k in _hospe_signals):
         score += 10   # hospe/flexliving operators need to act early on these
@@ -2661,6 +2706,9 @@ def score_lead(p):
             score += 40
         elif any(k in desc for k in ["nave industrial","centro logístico","parque empresarial"]):
             score += 33
+        elif any(k in desc for k in ["complejo de ocio","sala de espectáculos","equipamiento cultural",
+                                      "gran superficie comercial","parque comercial","centro comercial"]):
+            score += 30   # Kinépolis / Saona / Mango trigger
         elif any(k in desc for k in ["nueva construcción","nueva planta"]):
             score += 28
         elif "obra mayor" in desc: score += 18
@@ -3400,7 +3448,13 @@ Profiles:
 "hospe" — cambio de uso residencial/hospedaje, rehab edificios, plurifamiliar, primera ocupación
 "actiu" — oficinas, coworking, hoteles, hospitales, universidades, edificios terciarios
   "kiloutou" — alquiler maquinaria: demolición, vaciado, excavación, cimentación = ACTUAR YA
+            acta de inicio de obras / certificado de replanteo = maquinaria en DÍAS
   "molecor" — tuberías PVC: saneamiento, colector, red abastecimiento, pluviales
+            colector de pluviales, instalación de tubería, red de distribución
+  "sharing co" — coliving, flexliving, cambio de uso residencial/terciario
+               residencia de estudiantes, apartamentos turísticos, primera ocupación
+  "kinépolis" — gran superficie comercial, complejo de ocio, equipamiento cultural
+              parque comercial, sala de espectáculos, plan especial gran superficie
 
 MANDATORY MULTI-PROFILE RULES (always apply):
 - Urbanización/reparcelación → ALWAYS: ["promotores","constructora","alquiler","materiales"] + "infrastructura" if >€10M
@@ -4676,6 +4730,104 @@ def send_watchlist_alerts():
             except Exception: pass
     except Exception as e: log(f"  ⚠️ Watchlist: {e}")
 
+
+# ════════════════════════════════════════════════════════════════════════
+# SOURCE 9: Plataforma de Contratación del Estado (PLACE)
+# ════════════════════════════════════════════════════════════════════════
+# This is the national procurement platform — FCC, Kiloutou, Molecor ALL
+# monitor this daily. It covers state and autonomous community tenders >€30K.
+# ATOM feed is publicly available without authentication.
+# CPV code 45 = Construction; 44163000 = pipes/fittings; 43000000 = machinery.
+# ────────────────────────────────────────────────────────────────────────
+def search_place_national(date_from, date_to):
+    """
+    Scan Plataforma de Contratación del Estado ATOM feed for Madrid-area
+    construction, infrastructure and supply tenders.
+    Returns list of (url, title, summary, pem) tuples.
+    """
+    PLACE_FEEDS = [
+        # All tenders — filtered by keyword in processing
+        "https://contrataciondelestado.es/sindicacion/sindicacion_643/licitacionesPerfilesContratanteCompleto3.atom",
+        # CPV 45xxx (Construction works) — most relevant for FCC/Kiloutou
+        "https://contrataciondelestado.es/sindicacion/sindicacion_143/licitacionesPerfilesContratanteCompleto3.atom",
+    ]
+    # Madrid-area entities and CPV codes that matter
+    _MADRID_ENTITIES = [
+        "madrid","comunidad de madrid","ayuntamiento de","canal de isabel",
+        "adif","metro de madrid","renfe","ministerio de fomento",
+        "ministerio de transportes","ministerio de vivienda",
+    ]
+    _CONST_KEYWORDS = [
+        "obra", "construcción", "urbanización", "rehabilitación", "reforma",
+        "saneamiento", "abastecimiento", "infraestructura", "vial", "colector",
+        "tubería", "demolición", "cimentación", "excavación", "edificio",
+        "nave", "instalación", "pavimentación", "ampliación",
+    ]
+    results = []
+    seen_urls: set = set()
+
+    for feed_url in PLACE_FEEDS:
+        if not time_ok(need_s=30): break
+        try:
+            r = safe_get(feed_url, timeout=25)
+            if not r or r.status_code != 200: continue
+
+            from xml.etree import ElementTree as _ET
+            root = _ET.fromstring(r.content)
+            _NS = {"a": "http://www.w3.org/2005/Atom"}
+            entries = root.findall(".//a:entry", _NS) or root.findall(".//entry")
+
+            for entry in entries:
+                def _g(tag):
+                    el = entry.find(f"{{http://www.w3.org/2005/Atom}}{tag}")
+                    if el is None: el = entry.find(tag)
+                    return (el.text or "").strip() if el is not None else ""
+
+                title   = _g("title")
+                link_el = entry.find("{http://www.w3.org/2005/Atom}link") or entry.find("link")
+                url     = (link_el.get("href","") if link_el is not None else "")
+                summary = _g("summary") or _g("content")
+                pub     = _g("published") or _g("updated")
+
+                if not url or url in seen_urls: continue
+                if not title: continue
+
+                # Date filter
+                if pub:
+                    try:
+                        from dateutil import parser as _dp2
+                        pd = _dp2.parse(pub).replace(tzinfo=None)
+                        if pd.date() < (date_from - timedelta(days=7)).date(): continue
+                    except Exception: pass
+
+                combined = (title + " " + summary).lower()
+
+                # Madrid filter
+                if not any(m in combined for m in _MADRID_ENTITIES):
+                    continue
+
+                # Construction keyword filter
+                if not any(k in combined for k in _CONST_KEYWORDS):
+                    continue
+
+                # Extract budget from summary (PLACE embeds importe)
+                pem = 0.0
+                pem_m = re.search(r"(?:importe|valor|presupuesto)[^0-9]*([0-9][0-9.,]+)", combined)
+                if pem_m:
+                    try:
+                        raw_p = pem_m.group(1).replace(".","").replace(",",".")
+                        pem = float(raw_p)
+                    except Exception: pass
+
+                seen_urls.add(url)
+                results.append((url, title, summary[:500], pem))
+
+        except Exception as _e:
+            log(f"  ⚠️  PLACE feed error: {_e}")
+            continue
+
+    return results
+
 def run():
     if args.digest:
         log("📧 Digest-only mode"); get_sheet(); send_digest(); return
@@ -4689,7 +4841,7 @@ def run():
     date_from = today - timedelta(weeks=WEEKS_BACK)
 
     log("=" * 70)
-    log(f"🏗️  PlanningScout Madrid — Engine v17 (no-openpyxl+BORME-www+S2indent+word-boundary-muni)")
+    log(f"🏗️  PlanningScout Madrid — Engine v18 (PLACE-S9+24kws+coliving+actiu+kiloutou-signals+datos60d)")
     log(f"📅  {today.strftime('%Y-%m-%d %H:%M')}  |  Mode: {MODE.upper()}")
     log(f"📆  {date_from.strftime('%d/%m/%Y')} → {date_to.strftime('%d/%m/%Y')} ({WEEKS_BACK}w)")
     log(f"⚙️  {N_WORKERS} processing workers  |  ⏱️ Budget: {MAX_RUN_MINUTES}min")
@@ -4810,6 +4962,11 @@ def run():
                     "saneamiento de aguas",
                     # Contribuciones especiales = live obra with confirmed budget
                     "contribuciones especiales",
+                    "coliving",
+                    "acta de inicio de obras",
+                    "certificado final de obra",
+                    "proyecto básico",
+                    "propuesta de adjudicación",
                 }
                 kw_list = [(kw, sec, min(max_pg, 3), tag)
                            for kw, sec, max_pg, tag in KW_WEEKLY
@@ -4984,6 +5141,38 @@ def run():
                     log("  📋 BORME: no new construction companies in date range")
             except Exception as _be:
                 log(f"  ⚠️ BORME: {_be}")
+
+        # ── SOURCE 9: Plataforma de Contratación del Estado (PLACE) ──────────────
+        # National construction/infrastructure tenders > €30K
+        # Directly relevant for: FCC Construcción, Kiloutou, Molecor
+        if MODE in ("weekly","full") and time_ok(need_s=60):
+            log(f"\n{'─'*55}")
+            log("🏛️  SOURCE 9: PLACE (Plataforma Contratación del Estado)")
+            try:
+                place_items = search_place_national(date_from, date_to)
+                if place_items:
+                    log(f"  🏛️  PLACE: {len(place_items)} construction tenders found")
+                    for _pu, _pt, _ps, _pp in place_items[:30]:
+                        if not time_ok(need_s=20): break
+                        # Use same CM Contratos processing (bypass classify_permit)
+                        # Score and write via process_cm_contrato path
+                        _fake_row = {
+                            "bocm_url":   _pu,
+                            "permit_type":"licitación de obras",
+                            "description": _pt[:200] + " " + _ps[:300],
+                            "municipality": "Madrid",
+                            "phase":       "licitacion",
+                            "declared_value_eur": _pp if _pp > 0 else None,
+                            "source_label": "PLACE",
+                        }
+                        # Add to all_urls for BOCM processing? No — write directly
+                        # Process as CM contrato style (pre-verified, no classifier)
+                        all_urls.add(_pu)   # deduplicated by seen set
+                    log(f"  🏛️  PLACE: {len(place_items)} tenders → added to queue")
+                else:
+                    log("  🏛️  PLACE: 0 Madrid construction tenders this period")
+            except Exception as _place_e:
+                log(f"  ⚠️  PLACE: {_place_e}")
 
         # ── Remove already-seen from the collected BOCM queue ──────────────────
         all_urls = [u for u in all_urls
@@ -5875,7 +6064,8 @@ def search_datos_madrid(date_from, date_to, global_seen):
         if fecha_raw:
             try:
                 rec_date = _dp.parse(fecha_raw[:10], dayfirst=True).date()
-                if rec_date < date_from.date() or rec_date > date_to.date():
+                _cutoff = (date_to - timedelta(days=60)).date()
+                if rec_date < _cutoff or rec_date > date_to.date():
                     return
             except Exception:
                 pass
