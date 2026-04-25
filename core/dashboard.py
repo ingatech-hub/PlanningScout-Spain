@@ -1090,8 +1090,9 @@ def build_card(row, is_watched=False, inside_details=False):
         sbadge = ""
 
     # ── Urgency badge: days since publication ──
-    _new_badge  = ""
-    _days_badge = ""
+    _new_badge   = ""
+    _days_badge  = ""
+    _upd_badge   = ""  # 🔄 phase-advanced badge
     _pub_for_new = fnd[:10] if fnd else fecha
     if _pub_for_new:
         try:
@@ -1119,6 +1120,29 @@ def build_card(row, is_watched=False, inside_details=False):
         except Exception:
             pass
 
+    # 🔄 "Actualizado" badge — shown when phase advanced (last_updated within 14 days)
+    _last_upd = str(row.get("last_updated","") or "").strip()[:10]
+    _prev_ph  = str(row.get("previous_phase","") or "").strip()
+    if _last_upd and _prev_ph:
+        try:
+            _upd_dt  = datetime.strptime(_last_upd, "%Y-%m-%d")
+            _upd_days = (datetime.now() - _upd_dt).days
+            if _upd_days <= 14:
+                _PHASE_LABELS_SHORT = {
+                    "inicial":"Inicial","definitivo":"Definitivo","licitacion":"Licitación",
+                    "adjudicacion":"Adjudicación","en_obra":"En Obra","primera_ocupacion":"1ª Ocup.",
+                }
+                _prev_label = _PHASE_LABELS_SHORT.get(_prev_ph.lower(), _prev_ph)
+                _upd_badge = (
+                    f"<span style='font-family:\"JetBrains Mono\",monospace;font-size:9px;"
+                    f"font-weight:700;background:#eff6ff;color:#2563eb;border-radius:4px;"
+                    f"padding:2px 7px;margin-right:4px;"
+                    f"border:1px solid #bfdbfe;' "
+                    f"title='Antes: {_prev_label}'>🔄 Actualizado</span>"
+                )
+        except Exception:
+            pass
+
     # ── Source badge (BOCM / BOE) ──
     _fuente = str(row.get("fuente", "") or "").strip()
     _fuente_badge = ""
@@ -1136,7 +1160,7 @@ def build_card(row, is_watched=False, inside_details=False):
         f'    <div style="{SDO}"></div>'
         f'    <span style="{SMU}">{muni}</span>'
         f'  </div>'
-        f'  <div style="{SBD}">{_new_badge}{_days_badge}{_fuente_badge}{sbadge}{sc_pill(sc)}</div>'
+        f'  <div style="{SBD}">{_upd_badge}{_new_badge}{_days_badge}{_fuente_badge}{sbadge}{sc_pill(sc)}</div>'
         f'</div>'
     )
 
@@ -1744,6 +1768,8 @@ COL_MAP = {
     "Action Window":       "action_window",
     "Key Contacts":        "key_contacts",
     "Obra Timeline":       "obra_timeline",
+    "Last Updated":        "last_updated",    # timestamp of last phase-advance upsert
+    "Previous Phase":      "previous_phase",  # phase before last update
 }
 
 @st.cache_data(ttl=300)
@@ -2496,18 +2522,51 @@ with _tab_alertas:
   </p>
 </div>""", unsafe_allow_html=True)
         else:
-            st.markdown(
-                f'<p style="font-family:\'JetBrains Mono\',monospace;font-size:10px;color:#94a3b8;'
-                f'text-transform:uppercase;letter-spacing:.08em;margin:0 0 16px;">'
-                f'{len(_wl_valid)} proyecto{"s" if len(_wl_valid)!=1 else ""} en seguimiento</p>',
-                unsafe_allow_html=True)
+            # Count how many saved projects have phase-advanced since user saved them
+            _phase_order_map = {"solicitud":1,"inicial":2,"en_tramite":2,"definitivo":3,
+                                "licitacion":4,"adjudicacion":5,"en_obra":6,"primera_ocupacion":7}
+            _n_updated = 0
+            for _wr_check in _wl_valid:
+                _exp_chk = str(_wr_check.get("expediente","") or "").strip()
+                _phase_add = str(_wr_check.get("phase_at_add","") or "").strip()
+                _df_chk = _df_idx.get(_exp_chk) if "_df_idx" in dir() else None
+                if _df_chk is not None:
+                    _phase_cur_chk = str(_df_chk.get("fase","") or "").strip()
+                    if (_phase_order_map.get(_phase_cur_chk.lower(),0) >
+                            _phase_order_map.get(_phase_add.lower(),0)):
+                        _n_updated += 1
 
-            # Build lookup from current sheet data
+            # Build lookup before we display the counter (needed for _n_updated check above)
             _df_idx = {}
             if "expediente" in df.columns:
                 for _, _r in df[df["expediente"].astype(str).str.strip().isin(_seen)].iterrows():
                     _k = str(_r.get("expediente","")).strip()
                     if _k: _df_idx[_k] = _r
+
+            # Count using _df_idx now that it's populated
+            _n_updated = 0
+            for _wr_check in _wl_valid:
+                _exp_chk = str(_wr_check.get("expediente","") or "").strip()
+                _phase_add_chk = str(_wr_check.get("phase_at_add","") or "").strip()
+                _dr = _df_idx.get(_exp_chk)
+                if _dr is not None:
+                    _phase_cur_chk = str(_dr.get("fase","") or "").strip()
+                    if (_phase_order_map.get(_phase_cur_chk.lower(),0) >
+                            _phase_order_map.get(_phase_add_chk.lower(),0)):
+                        _n_updated += 1
+
+            _upd_suffix = (
+                f' &nbsp;<span style="background:#eff6ff;color:#2563eb;'
+                f'font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;'
+                f'border:1px solid #bfdbfe;">🔄 {_n_updated} actualizados</span>'
+            ) if _n_updated > 0 else ""
+
+            st.markdown(
+                f'<p style="font-family:\'JetBrains Mono\',monospace;font-size:10px;color:#94a3b8;'
+                f'text-transform:uppercase;letter-spacing:.08em;margin:0 0 16px;">'
+                f'{len(_wl_valid)} proyecto{"s" if len(_wl_valid)!=1 else ""} en seguimiento'
+                f'{_upd_suffix}</p>',
+                unsafe_allow_html=True)
 
             for _wr in _wl_valid:
                 _exp_s  = str(_wr.get("expediente","") or "").strip()
@@ -2529,6 +2588,39 @@ with _tab_alertas:
                         f'<div style="height:3px;background:{_pfc};border-radius:3px 3px 0 0;'
                         f'margin-bottom:-2px;"></div>',
                         unsafe_allow_html=True)
+
+                # ── Phase-change notification banner ──────────────────────────
+                # Shown when the current phase in the sheet is more advanced than
+                # the phase at the time the user saved the alert.
+                _phase_add   = str(_wr.get("phase_at_add","") or "").strip()
+                _phase_now   = str((_row.get("fase","") if _row is not None else "") or "").strip()
+                _PHASE_ORDER_A = {"solicitud":1,"inicial":2,"en_tramite":2,"definitivo":3,
+                                  "licitacion":4,"adjudicacion":5,"en_obra":6,"primera_ocupacion":7}
+                _PHASE_LABEL_A = {
+                    "inicial":"Aprobación Inicial","definitivo":"Aprobación Definitiva",
+                    "licitacion":"Licitación activa","adjudicacion":"Adjudicación",
+                    "en_obra":"Obra en ejecución","primera_ocupacion":"1ª Ocupación",
+                    "en_tramite":"En tramitación","solicitud":"Pre-lead",
+                }
+                _phase_advanced = (
+                    _phase_now and _phase_add and
+                    _PHASE_ORDER_A.get(_phase_now.lower(),0) > _PHASE_ORDER_A.get(_phase_add.lower(),0)
+                )
+                if _phase_advanced:
+                    _pl_now = _PHASE_LABEL_A.get(_phase_now.lower(), _phase_now)
+                    _pl_add = _PHASE_LABEL_A.get(_phase_add.lower(), _phase_add)
+                    st.markdown(
+                        f'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;'
+                        f'padding:10px 16px;margin-bottom:6px;display:flex;align-items:center;gap:10px;">'
+                        f'<span style="font-size:18px;">🔄</span>'
+                        f'<div>'
+                        f'<span style="font-size:12px;font-weight:700;color:#1d4ed8;">Este proyecto ha avanzado de fase</span>'
+                        f'<span style="font-size:11px;color:#64748b;margin-left:8px;">'
+                        f'{_pl_add} → <strong>{_pl_now}</strong></span>'
+                        f'</div>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
 
                 # ── Real lead card (identical to main list) ───────────────────
                 if _row is not None:
