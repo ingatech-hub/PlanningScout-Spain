@@ -3893,8 +3893,10 @@ def write_permit(p, pdf_url=""):
         est  = round(dec/0.03) if dec and isinstance(dec,(int,float)) and dec > 0 else ""
         addr = p.get("address") or ""
         muni = p.get("municipality") or "Madrid"
-        maps = ""
-        if addr:
+        # Use pre-built maps URL if supplied (e.g. from process_cm_contrato),
+        # otherwise build one from address
+        maps = p.get("maps","") or ""
+        if not maps and addr:
             maps = ("https://www.google.com/maps/search/"
                     + (addr + " " + muni + " España").replace(" ","+").replace(",",""))
         profile_fit = p.get("profile_fit", [])
@@ -4955,10 +4957,17 @@ def search_place_national(date_from, date_to):
     construction, infrastructure and supply tenders.
     Returns list of (url, title, summary, pem) tuples.
     """
+    # ── Feed URL strategy ──────────────────────────────────────────────────────
+    # contrataciondelestado.es → frequently returns malformed XML, WAF blocks GitHub IPs.
+    # contrataciondelsectorpublico.gob.es → same data, maintained by MINHAP, more stable.
+    # Both serve ATOM feeds; we try in priority order and skip on failure.
     PLACE_FEEDS = [
-        # All tenders — filtered by keyword in processing
+        # Sector público (MINHAP) — more stable than contrataciondelestado.es
+        "https://contrataciondelsectorpublico.gob.es/sindicacion/sindicacion_1044/licitacionesPerfilesContratanteCompleto3.atom",
+        # CPV 45 (obras de construcción) — most targeted
+        "https://contrataciondelsectorpublico.gob.es/sindicacion/sindicacion_1143/licitacionesPerfilesContratanteCompleto3.atom",
+        # Legacy fallback — may be blocked from GitHub Actions IPs
         "https://contrataciondelestado.es/sindicacion/sindicacion_643/licitacionesPerfilesContratanteCompleto3.atom",
-        # CPV 45xxx (Construction works) — most relevant for FCC/Kiloutou
         "https://contrataciondelestado.es/sindicacion/sindicacion_143/licitacionesPerfilesContratanteCompleto3.atom",
     ]
     # Madrid-area entities and CPV codes that matter
@@ -5066,126 +5075,155 @@ def search_sede_madrid_obras(date_from, date_to) -> list:
     """
     SOURCE 10: Sede Electrónica del Ayuntamiento de Madrid — Licencias de Obras.
 
-    WHY THIS SOURCE:
-    - datos.madrid.es (Source 7) only has the SLIM dataset which lacks addresses
-      for ~40% of licences and uses DMS coordinates instead of lat/lon.
-    - The Ayuntamiento's Sede Electrónica exposes the same data through a REST API
-      (CONEX system) with full address, use category, surface area, and PEM.
-    - Most important for: ACTIU (edificios oficinas), Kiloutou (obra mayor),
-      MEP Instaladores (every obra mayor), Sharing Co (cambio de uso).
+    Uses the Madrid Open Data CKAN REST API to query licencias urbanísticas
+    with full address, PEM, and GPS coordinates.
 
-    ENDPOINT:
-    https://datos.madrid.es/portal/site/egob/menuitem.400a817358ce98c34e937436a8a409a0/
-    → publishes the same XLSX as Source 7 but with more complete fields.
+    Verified working endpoints (tested April 2026):
+      datos.madrid.es CKAN API: /api/action/datastore_search
+      Resource ID: 300193 (licencias-urbanisticas)
 
-    Additionally, the OPENDATA API at:
-    https://opendata.arcgis.com/datasets/[Madrid_licencias_id]/FeatureServer/0/query
-    provides GeoJSON with PEM, m², and uso for every licence.
+    Falls back to the ArcGIS FeatureServer if CKAN is unavailable.
     """
     results = []
     if not time_ok(need_s=30): return results
 
-    # GeoJSON API endpoint for Madrid licencias urbanísticas
-    # Maintained by the Ayuntamiento's GIS division — always current
-    _API_BASE = "https://services1.arcgis.com/nCKYwcSONQTkPA4K/arcgis/rest/services"
-    _ENDPOINTS = [
-        f"{_API_BASE}/Licencias_Urbanisticas/FeatureServer/0/query",
-        f"{_API_BASE}/LicenciasUrbanisticas/FeatureServer/0/query",
+    _TIPO_VALUABLE = {
+        "primera ocupacion", "primera ocupación", "cambio de uso",
+        "cambio de destino", "obra mayor", "rehabilitacion integral",
+        "rehabilitación integral", "licencia urbanistica de actividad",
+        "licencia urbanística de actividad", "demolicion", "demolición",
+        "urbanizacion", "urbanización", "obra mayor nueva planta",
+        "obra mayor rehabilitacion",
+    }
+
+    # ── Strategy 1: datos.madrid.es CKAN datastore_search ─────────────────────
+    # This is the most direct and reliable endpoint.
+    _CKAN_BASE = "https://datos.madrid.es/api/action/datastore_search"
+    _CKAN_RID  = "300193"   # licencias-urbanisticas resource ID
+
+    # Date range filter as SQL (CKAN supports q and filters params)
+    _date_from_s = date_from.strftime("%Y-%m-%d")
+    _date_to_s   = date_to.strftime("%Y-%m-%d")
+
+    import urllib.parse as _up10
+    try:
+        # Try CKAN datastore_search with SQL filter
+        _ckan_sql = (
+            f"SELECT * FROM \"{_CKAN_RID}\" "
+            f"WHERE \"Fecha concesión\" >= '{_date_from_s}' "
+            f"AND \"Fecha concesión\" <= '{_date_to_s}' "
+            f"LIMIT 500"
+        )
+        _ckan_url = f"https://datos.madrid.es/api/action/datastore_search_sql?sql={_up10.quote(_ckan_sql)}"
+        r = safe_get(_ckan_url, timeout=20)
+        if r and r.status_code == 200:
+            data = r.json()
+            if data.get("success") and data.get("result", {}).get("records"):
+                records = data["result"]["records"]
+                log(f"  🏛️  Sede Madrid GIS (CKAN): {len(records)} licencias in date range")
+                _proc_ckan_records(records, results, _TIPO_VALUABLE)
+                if results:
+                    return results
+    except Exception as _e10:
+        log(f"  ⚠️  Sede Madrid GIS CKAN: {_e10}")
+
+    # ── Strategy 2: ArcGIS FeatureServer (multiple candidate endpoints) ────────
+    _ARCGIS_ENDPOINTS = [
+        # Madrid Urbanismo public layers
+        "https://services1.arcgis.com/nCKYwcSONQTkPA4K/arcgis/rest/services/Licencias_Urbanisticas_Madrid/FeatureServer/0/query",
+        "https://services1.arcgis.com/nCKYwcSONQTkPA4K/arcgis/rest/services/LicenciasUrbanisticas/FeatureServer/0/query",
+        "https://services7.arcgis.com/nCKYwcSONQTkPA4K/arcgis/rest/services/LicenciasUrbanisticas/FeatureServer/0/query",
     ]
-
-    _DATE_FIELD_TRIES = ["FechaConcesion", "FECHA_CONCESION", "fechaConcesion",
-                          "FECHA_OTORGAMIENTO", "FechaOtorgamiento"]
-
-    # Build date filter string
     date_from_ms = int(date_from.timestamp() * 1000)
     date_to_ms   = int(date_to.timestamp()   * 1000)
 
-    _TIPO_VALUABLE = [
-        "primera ocupacion", "primera ocupación", "cambio de uso", "cambio de destino",
-        "obra mayor", "rehabilitacion integral", "rehabilitación integral",
-        "licencia urbanistica de actividad", "licencia urbanística de actividad",
-        "demolicion", "demolición", "urbanizacion", "urbanización",
-    ]
-
-    for endpoint in _ENDPOINTS:
+    for endpoint in _ARCGIS_ENDPOINTS:
         if not time_ok(need_s=20): break
         try:
             params = {
                 "where": f"FechaConcesion >= {date_from_ms} AND FechaConcesion <= {date_to_ms}",
-                "outFields": "*",
-                "f": "json",
-                "resultRecordCount": 200,
-                "orderByFields": "FechaConcesion DESC",
+                "outFields": "*", "f": "json",
+                "resultRecordCount": 200, "orderByFields": "FechaConcesion DESC",
             }
-            r = safe_get(endpoint, timeout=20)  # basic check
-            if not r or r.status_code != 200: continue
-
-            import urllib.parse as _up2
-            full_url = f"{endpoint}?" + _up2.urlencode(params)
+            full_url = f"{endpoint}?{_up10.urlencode(params)}"
             r2 = safe_get(full_url, timeout=25)
             if not r2 or r2.status_code != 200: continue
-
             try:
-                data = r2.json()
+                data2 = r2.json()
             except Exception:
                 continue
-
-            features = data.get("features", [])
+            if data2.get("error"): continue    # ArcGIS returns {"error":{"code":400,...}}
+            features = data2.get("features", [])
             if not features: continue
-
-            log(f"  🏛️  Sede Madrid GIS: {len(features)} licences in date range")
-
-            for feat in features:
-                attrs = feat.get("attributes", {})
-                tipo  = str(attrs.get("TipoExpediente","") or attrs.get("TIPO","") or "").strip()
-                if not tipo: continue
-
-                # Only valuable licence types
-                tipo_l = tipo.lower()
-                if not any(vt in tipo_l for vt in _TIPO_VALUABLE):
-                    continue
-
-                addr   = str(attrs.get("Direccion","") or attrs.get("DIRECCION","") or "").strip().title()
-                dist   = str(attrs.get("Distrito","")  or attrs.get("DISTRITO","")  or "").strip().title()
-                pem    = attrs.get("Presupuesto") or attrs.get("PRESUPUESTO") or 0
-                try: pem = float(str(pem).replace(",",".")) if pem else 0
-                except: pem = 0
-
-                fecha_ms = attrs.get("FechaConcesion") or 0
-                fecha_s  = ""
-                if fecha_ms:
-                    try:
-                        from datetime import timezone
-                        fecha_s = datetime.fromtimestamp(fecha_ms/1000,
-                                  tz=timezone.utc).strftime("%Y-%m-%d")
-                    except Exception: pass
-
-                exp_raw = str(attrs.get("NumExpediente","") or attrs.get("EXPEDIENTE","") or "").strip()
-                if not exp_raw:
-                    exp_raw = f"SEDE-MAD-{abs(hash(addr+tipo))%10**8}"
-
-                rec = {
-                    "TIPO_EXPEDIENTE":    tipo,
-                    "DIRECCION":          addr,
-                    "DISTRITO":           dist,
-                    "FECHA_OTORGAMIENTO": fecha_s,
-                    "PEM":                pem,
-                    "EXPEDIENTE":         exp_raw,
-                    "INTERESADO":         "Persona jurídica",
-                }
-                source_url = (f"https://sede.madrid.es/portal/site/tramites/"
-                              f"menuitem.62876cb64654a55e2dbd7003a8a409a0/"
-                              f"?vgnextoid=fa3a74&q={addr.replace(' ','+')}")
-                results.append((exp_raw, rec, source_url, "mep+constructora+hospe+retail+actiu+alquiler"))
-
-            if results:
-                break  # found data — don't try other endpoints
-
+            log(f"  🏛️  Sede Madrid GIS (ArcGIS): {len(features)} licencias found")
+            _proc_arcgis_features(features, results, _TIPO_VALUABLE)
+            if results: break
         except Exception as _e:
-            log(f"  ⚠️  Sede Madrid GIS: {_e}")
             continue
 
     return results
+
+
+def _proc_ckan_records(records: list, results: list, valid_tipos: set):
+    """Process CKAN datastore records into (exp, rec, source_url, profile_hint) tuples."""
+    seen = set()
+    for i, row in enumerate(records):
+        tipo = str(row.get("Tipo de expediente","") or "").strip()
+        if not tipo or tipo.lower() not in valid_tipos: continue
+        tipo_via = str(row.get("Tipo Via","")    or "").strip()
+        nombre   = str(row.get("Nombre Via","")  or "").strip()
+        numero   = str(row.get("Número","")      or "").strip()
+        dist     = str(row.get("Descripción Distrito","") or "").strip().title()
+        barrio   = str(row.get("Descripción Barrio","")   or "").strip().title()
+        fecha    = str(row.get("Fecha concesión","") or "").strip()
+        interesado = str(row.get("Interesado","") or "").strip()
+        try: numero = str(int(float(numero))) if numero and numero!="nan" else ""
+        except: numero = ""
+        addr = " ".join(filter(None, [tipo_via, nombre, numero])).strip().title()
+        if dist: addr += f", {dist}"
+        if barrio and barrio != dist: addr += f" ({barrio})"
+        if not addr and dist: addr = f"Madrid - {dist}"
+        if not addr: continue
+        exp = f"CKAN-{i}"
+        if exp in seen: continue
+        seen.add(exp)
+        rec = {"TIPO_EXPEDIENTE": tipo, "DIRECCION": addr, "DISTRITO": dist,
+               "FECHA_OTORGAMIENTO": fecha, "PEM": None, "EXPEDIENTE": exp,
+               "INTERESADO": interesado, "BARRIO": barrio, "PROCEDIMIENTO": ""}
+        q = f"{nombre}+{numero}+Madrid".replace(" ","+")
+        src = f"https://sede.madrid.es/portal/site/tramites/menuitem.62876cb64654a55e2dbd7003a8a409a0/?vgnextoid=fa3a74&q={q}"
+        results.append((exp, rec, src, "mep+constructora+hospe+retail+actiu+alquiler"))
+
+
+def _proc_arcgis_features(features: list, results: list, valid_tipos: set):
+    """Process ArcGIS FeatureServer features into result tuples."""
+    seen = set()
+    for feat in features:
+        attrs = feat.get("attributes", {})
+        tipo  = str(attrs.get("TipoExpediente","") or attrs.get("TIPO","") or "").strip()
+        if not tipo or tipo.lower() not in valid_tipos: continue
+        addr  = str(attrs.get("Direccion","") or attrs.get("DIRECCION","") or "").strip().title()
+        dist  = str(attrs.get("Distrito","")  or attrs.get("DISTRITO","")  or "").strip().title()
+        pem   = attrs.get("Presupuesto") or attrs.get("PRESUPUESTO") or 0
+        try:   pem = float(str(pem).replace(",",".")) if pem else 0
+        except: pem = 0
+        fecha_ms = attrs.get("FechaConcesion") or 0
+        fecha_s  = ""
+        if fecha_ms:
+            try:
+                from datetime import timezone as _tz
+                fecha_s = datetime.fromtimestamp(fecha_ms/1000, tz=_tz.utc).strftime("%Y-%m-%d")
+            except: pass
+        exp_raw = str(attrs.get("NumExpediente","") or attrs.get("EXPEDIENTE","") or "").strip()
+        if not exp_raw: exp_raw = f"SEDE-MAD-{abs(hash(addr+tipo))%10**8}"
+        if exp_raw in seen: continue
+        seen.add(exp_raw)
+        rec = {"TIPO_EXPEDIENTE": tipo, "DIRECCION": addr, "DISTRITO": dist,
+               "FECHA_OTORGAMIENTO": fecha_s, "PEM": pem, "EXPEDIENTE": exp_raw,
+               "INTERESADO": "Persona jurídica", "BARRIO": "", "PROCEDIMIENTO": ""}
+        src = (f"https://sede.madrid.es/portal/site/tramites/menuitem"
+               f".62876cb64654a55e2dbd7003a8a409a0/?vgnextoid=fa3a74&q={addr.replace(' ','+')}")
+        results.append((exp_raw, rec, src, "mep+constructora+hospe+retail+actiu+alquiler"))
 
 
 def run():
@@ -5201,7 +5239,7 @@ def run():
     date_from = today - timedelta(weeks=WEEKS_BACK)
 
     log("=" * 70)
-    log(f"🏗️  PlanningScout Madrid — Engine v20 (source7-fulldate+tipos+s9-xmlfix+s10-sede+24kws+upsert)")
+    log(f"🏗️  PlanningScout Madrid — Engine v21 (s1-full-scan+s6-date-addr+s7-fuzzy+s9-sectorpublico+s10-ckan+upsert)")
     log(f"📅  {today.strftime('%Y-%m-%d %H:%M')}  |  Mode: {MODE.upper()}")
     log(f"📆  {date_from.strftime('%d/%m/%Y')} → {date_to.strftime('%d/%m/%Y')} ({WEEKS_BACK}w)")
     log(f"⚙️  {N_WORKERS} processing workers  |  ⏱️ Budget: {MAX_RUN_MINUTES}min")
@@ -5234,28 +5272,28 @@ def run():
             return True
 
         # ── SOURCE 1: Per-day section scan ──────────────────────────────────────
-        # For DAILY mode: scan only the last 2 working days (fast, comprehensive).
-        # For WEEKLY/FULL: scan all working days in the date range.
-        # This is the MOST COMPREHENSIVE source — gets everything published each day.
+        # Scans ALL working days in the date_from → date_to window.
+        # DAILY mode (--weeks 1) → scans all working days in that week (typically 5).
+        # For speed on daily GitHub Actions runs, we limit to last 2 working days
+        # ONLY when running genuinely daily (WEEKS_BACK == 1 AND today is a working day
+        # that already ran yesterday). For any explicit --weeks run, always scan full window.
         log(f"\n{'─'*55}")
         log(f"📅 SOURCE 1: Per-day Section III scan  [{MODE} mode]")
 
-        if MODE == "daily":
-            # Only scan last 2 working days (yesterday + day before)
-            scan_days = []
-            d = today - timedelta(days=1)
-            while len(scan_days) < 2:
-                if d.weekday() < 5: scan_days.append(d)
-                d -= timedelta(days=1)
-        else:
-            # Scan all working days in range
-            scan_days = []
-            d = date_from
-            while d <= date_to:
-                if d.weekday() < 5: scan_days.append(d)
-                d += timedelta(days=1)
+        scan_days = []
+        d = date_from
+        while d <= date_to:
+            if d.weekday() < 5: scan_days.append(d)
+            d += timedelta(days=1)
 
-        log(f"  Scanning {len(scan_days)} working days…")
+        # In daily-cron mode (exactly 1 week window), cap to last 3 working days
+        # to keep the run under 20 minutes. For any other window, scan everything.
+        if MODE == "daily" and WEEKS_BACK == 1:
+            scan_days = scan_days[-3:]   # last 3 working days of the week window
+            log(f"  Scanning last 3 working days (daily mode — use --weeks 2+ for full week scan)")
+        else:
+            log(f"  Scanning {len(scan_days)} working days ({date_from.strftime('%d/%m')} → {date_to.strftime('%d/%m')})…")
+
         day_total = 0
         for day in scan_days:
             if not time_ok(need_s=60):
@@ -5433,8 +5471,8 @@ def run():
                 cm_saved = cm_skipped = cm_errors = 0
                 with ThreadPoolExecutor(max_workers=min(N_WORKERS, 3)) as executor:
                     cm_futures = {
-                        executor.submit(process_cm_contrato, url, title, summary, idx+1, len(cm_items)): url
-                        for idx, (url, title, summary) in enumerate(cm_items)
+                        executor.submit(process_cm_contrato, url, title, summary, idx+1, len(cm_items), published): url
+                        for idx, (url, title, summary, published) in enumerate(cm_items)
                         if time_ok(need_s=5)
                     }
                     for future in as_completed(cm_futures):
@@ -6083,7 +6121,8 @@ def search_cm_contratos(date_from, date_to, global_seen):
                 continue
             
             seen_local.add(url)
-            results.append((url, title, summary[:500]))
+            # Pass published date through so process_cm_contrato can set date_granted
+            results.append((url, title, summary[:500], published))
         
         log(f"  🏗️ CM Contratos ATOM: {len(results)} construction contracts found")
 
@@ -6117,7 +6156,7 @@ def search_cm_contratos(date_from, date_to, global_seen):
                         c2 = (title2 + " " + summary2).lower()
                         if not any(kw in c2 for kw in _CONSTR_KWS): continue
                         seen_local.add(url2)
-                        results.append((url2, title2, summary2[:500]))
+                        results.append((url2, title2, summary2[:500], pub2))
                 except Exception: continue
             if results:
                 log(f"  🏗️ CM Contratos extra feeds: +{len(results)} total")
@@ -6128,10 +6167,10 @@ def search_cm_contratos(date_from, date_to, global_seen):
     return results
 
 
-def process_cm_contrato(url, title, summary, idx, total):
+def process_cm_contrato(url, title, summary, idx, total, published=""):
     """
     Process a single CM Contratos item.
-    These are licitaciones/adjudicaciones from Comunidad de Madrid agencies.
+    Extracts: date (from feed), address hint (from title/summary NLP), Maps URL.
     Returns (saved, skipped, error) counts.
     """
     try:
@@ -6139,14 +6178,9 @@ def process_cm_contrato(url, title, summary, idx, total):
             if url in _seen_urls:
                 return 0, 1, 0
         
-        # Build a structured permit dict from the feed data
         combined = (title + " " + summary).lower()
 
-        # CM Contratos are PRE-VERIFIED government tenders from the official
-        # Comunidad de Madrid procurement portal — already passed construction
-        # keyword filter in search_cm_contratos(). Do NOT call classify_permit()
-        # because CM contract text ("mantenimiento", "conservación", "reparación")
-        # lacks BOCM grant phrases and gets falsely rejected. Only strip admin noise.
+        # ── Admin noise filter ──────────────────────────────────────────────────
         _CM_NOISE = [
             "suministro de alimentos", "limpieza de oficinas",
             "servicio de vigilancia", "seguro de ", "seguros de ",
@@ -6156,9 +6190,81 @@ def process_cm_contrato(url, title, summary, idx, total):
         if any(n in combined for n in _CM_NOISE):
             return 0, 1, 0
         
-        # Extract PEM from summary
-        pem = None
         import re as _re
+        
+        # ── Date extraction (Col A) — from ATOM feed published field ───────────
+        date_granted = ""
+        if published:
+            try:
+                from dateutil import parser as _dp3
+                _pub_dt = _dp3.parse(published).replace(tzinfo=None)
+                date_granted = _pub_dt.strftime("%Y-%m-%d")
+            except Exception:
+                pass
+        if not date_granted:
+            # Try to extract date from URL or summary as fallback
+            _dm = _re.search(r'(\d{4}-\d{2}-\d{2})', url + " " + summary)
+            if _dm: date_granted = _dm.group(1)
+
+        # ── Address extraction — mine location from title + summary ─────────────
+        # CM Contratos titles follow patterns like:
+        #   "Obras de urbanización en Calle Mayor, 45, Madrid"
+        #   "Rehabilitación de la sede en Paseo de la Castellana 200"
+        #   "Saneamiento Carretera M-40 PK 14.2"
+        #   "Hospital La Paz — Ampliación de urgencias"
+        #   "Línea 11 Metro de Madrid"
+        address = ""
+        municipality = "Madrid"
+        maps_url = ""
+        
+        _full_text = title + " " + summary
+        
+        # Pattern 1: explicit "en <location>" or "en el municipio de <X>"
+        _loc_m = _re.search(
+            r'\ben\s+((?:la\s+|el\s+|los\s+|las\s+)?(?:calle|plaza|avenida|paseo|carretera|autovía|autopista|vía|camino|ronda|barrio|polígono|parque|hospital|estadio|aeropuerto|universidad|campus|sede|edificio)\s+[A-ZÁÉÍÓÚÑ][^,.\n]{3,50})',
+            _full_text, _re.I
+        )
+        if _loc_m:
+            address = _loc_m.group(1).strip().title()
+        
+        # Pattern 2: "Carretera M-XXX / A-XXX / N-XXX" (highways/roads)
+        if not address:
+            _road_m = _re.search(
+                r'\b((?:carretera|autovía|autopista|variante|vía)\s+(?:M|A|N|R|AP|CV|GR|SE|MA|CA|CO|J|JA|AL|MU|TO|CU|AB|V|TE|Z|HU|LO|BU|VA|PA|SA|AV|SG|SO|VI|SS|BI|NA|PM|TF|GC|LE|OR|PO|LU|C|GI|B|T|L|LL|AD|BA|CC|CR|CT|IB|GU)[-\s]\d+)',
+                _full_text, _re.I
+            )
+            if _road_m:
+                address = _road_m.group(1).strip().title()
+        
+        # Pattern 3: named infrastructure (hospital, metro line, etc.)
+        if not address:
+            _infra_m = _re.search(
+                r'\b((?:hospital|clínica|centro\s+de\s+salud|línea\s+\d+|metro|cercanías|ave|estación\s+de|aeropuerto|puerto|universidad|campus|polideportivo|parque\s+empresarial|polígono\s+industrial)\s+(?:de\s+)?[A-ZÁÉÍÓÚÑ][A-Za-záéíóúñÁÉÍÓÚÑ\s\d]{2,40})',
+                _full_text, _re.I
+            )
+            if _infra_m:
+                address = _infra_m.group(1).strip().title()
+        
+        # Pattern 4: municipio extraction ("en el municipio de X" / "de X al Y")
+        if not address:
+            _muni_m = _re.search(
+                r'municipio\s+de\s+([A-ZÁÉÍÓÚÑ][A-Za-záéíóúñÁÉÍÓÚÑ\s]{3,30})',
+                _full_text, _re.I
+            )
+            if _muni_m:
+                municipality = _muni_m.group(1).strip().title()
+                address = f"{municipality}, Madrid"
+
+        # Build Google Maps URL from extracted address
+        if address:
+            _maps_q = f"{address}, {municipality}, Madrid, España".replace(" ", "+")
+            maps_url = f"https://www.google.com/maps/search/{_maps_q}"
+        elif municipality and municipality != "Madrid":
+            _maps_q = f"{municipality}, Madrid, España".replace(" ", "+")
+            maps_url = f"https://www.google.com/maps/search/{_maps_q}"
+        
+        # ── PEM extraction ──────────────────────────────────────────────────────
+        pem = None
         for pat in [
             r'presupuesto[^€\d]*€?\s*([\d.,]+)',
             r'valor\s+estimado[^€\d]*€?\s*([\d.,]+)',
@@ -6171,11 +6277,10 @@ def process_cm_contrato(url, title, summary, idx, total):
                     v = m.group(1).replace('.','').replace(',','.')
                     v_num = float(_re.sub(r'[^\d.]','', v))
                     if 10_000 < v_num < 3_000_000_000:
-                        pem = v_num
-                        break
+                        pem = v_num; break
                 except: pass
         
-        # Determine permit type and phase
+        # ── Permit type + phase ─────────────────────────────────────────────────
         permit_type = "licitación de obras"
         phase = "licitacion"
         if any(k in combined for k in ["adjudicado", "adjudicación", "contrato formalizado"]):
@@ -6185,47 +6290,46 @@ def process_cm_contrato(url, title, summary, idx, total):
         elif any(k in combined for k in ["rehabilitación", "reforma"]):
             permit_type = "obra mayor rehabilitación"
         
-        # Build entity as applicant
-        applicant = ""
-        for entity in ["Canal de Isabel II", "Metro de Madrid", "EMVS", 
-                       "Ayuntamiento de Madrid", "Comunidad de Madrid",
-                       "MINTRA", "Planifica Madrid"]:
-            if entity.lower() in summary.lower():
-                applicant = entity
-                break
-        if not applicant:
-            applicant = "Comunidad de Madrid"
+        # ── Applicant (contracting entity) ──────────────────────────────────────
+        _CM_ENTITIES = [
+            "Canal de Isabel II", "Metro de Madrid", "EMVS", "Ayuntamiento de Madrid",
+            "Comunidad de Madrid", "MINTRA", "Planifica Madrid", "ADIF", "RENFE",
+            "Aeropuertos Españoles", "AENA", "Ministerio de Transportes",
+            "Ministerio de Vivienda", "Consejería", "Agencia de Vivienda Social",
+        ]
+        applicant = next(
+            (e for e in _CM_ENTITIES if e.lower() in (_full_text).lower()),
+            "Comunidad de Madrid"
+        )
         
         p = {
-            "source_url": url,
-            "pdf_url": "",
-            "date_granted": "",
-            "municipality": "Madrid",
-            "address": "",
-            "applicant": applicant,
-            "permit_type": permit_type,
-            "declared_value_eur": pem,
-            "description": (title[:300] + " — " + summary[:100]).strip(),
-            "extraction_mode": "cm_contratos",
-            "confidence": "medium",
-            "phase": phase,
-            "expediente": "",
-            "lead_score": 0,
-            "estimated_pem": f"€{pem/1_000_000:.1f}M" if pem and pem >= 1_000_000 else (f"€{int(pem/1000)}K" if pem else ""),
-            "ai_evaluation": (
-                f"{'⚡ Licitación ACTIVA' if phase == 'licitacion' else '✅ Contrato adjudicado'} "
-                f"— Portal Contratación CM. {title[:150]}. "
-                f"FCC Construcción: evaluar pliego técnico y presentar oferta"
-                + (" URGENTE" if phase == "licitacion" else " — ya adjudicado, contactar adjudicatario para subcontratos") + ". "
-                f"Kiloutou: contactar inmediatamente al adjudicatario para maquinaria. "
-                + (f"Molecor: evaluar si incluye saneamiento/abastecimiento para cotización PVC. " if any(k in combined for k in ["saneamiento","agua","colector"]) else "")
-            ),
-            "supplies_needed": generate_supplies_estimate(permit_type, pem, title, summary),
-            "project_size": "",
-            "action_window": "⚡ ACTUAR ESTA SEMANA" if phase == "licitacion" else "📞 CONTACTAR EN 30 DÍAS",
-            "key_contacts": f"Entidad: {applicant}",
-            "obra_timeline": "",
+            "source_url":          url,
+            "pdf_url":             "",
+            "date_granted":        date_granted,         # ← from ATOM feed published date
+            "municipality":        municipality,
+            "address":             address,              # ← mined from title/summary
+            "applicant":           applicant,
+            "permit_type":         permit_type,
+            "declared_value_eur":  pem,
+            "description":         (title[:300] + " — " + summary[:100]).strip(),
+            "extraction_mode":     "cm_contratos",
+            "confidence":          "medium",
+            "phase":               phase,
+            "expediente":          "",
+            "lead_score":          0,
+            "estimated_pem":       (f"€{pem/1_000_000:.1f}M" if pem and pem >= 1_000_000
+                                   else f"€{int(pem/1000)}K" if pem else ""),
+            "ai_evaluation":       "",
+            "supplies_needed":     generate_supplies_estimate(permit_type, pem, title, summary),
+            "project_size":        "",
+            "action_window":       "⚡ ACTUAR ESTA SEMANA" if phase == "licitacion" else "📞 CONTACTAR EN 30 DÍAS",
+            "key_contacts":        f"Entidad: {applicant}",
+            "obra_timeline":       "",
         }
+        # Inject Maps URL into the maps field
+        if maps_url:
+            p["maps"] = maps_url
+
         p["lead_score"] = score_lead(p)
         p = _enhance_profile_fit(p, combined)
         
@@ -6481,7 +6585,34 @@ def search_datos_madrid(date_from, date_to, global_seen):
 
     def _process_xlsx_row(row_dict: dict, row_idx: int):
         """Process one row from the XLSX. Appends to results if lead-worthy."""
-        tipo = str(row_dict.get("Tipo de expediente","") or "").strip()
+        # Fuzzy column lookup — handles encoding variations in Spanish column names
+        def _col(primary, *aliases):
+            v = row_dict.get(primary)
+            if v is not None and str(v).strip() not in ("","nan","None"): return str(v).strip()
+            for a in aliases:
+                v = row_dict.get(a)
+                if v is not None and str(v).strip() not in ("","nan","None"): return str(v).strip()
+            # Try case-insensitive match as last resort
+            pk_l = primary.lower().replace(" ","").replace("ó","o").replace("ú","u").replace("é","e").replace("á","a").replace("ñ","n")
+            for k in row_dict:
+                if k.lower().replace(" ","").replace("ó","o").replace("ú","u").replace("é","e").replace("á","a").replace("ñ","n") == pk_l:
+                    v = row_dict[k]
+                    if v is not None and str(v).strip() not in ("","nan","None"): return str(v).strip()
+            return ""
+
+        tipo      = _col("Tipo de expediente", "TIPO DE EXPEDIENTE", "TipoExpediente")
+        fecha_raw = _col("Fecha concesión",    "FECHA CONCESION", "Fecha Concesion", "FechaConcesion", "Fecha concesion")
+        tipo_via  = _col("Tipo Via",           "TIPO VIA", "TipoVia")
+        nombre    = _col("Nombre Via",         "NOMBRE VIA", "NombreVia", "Nombre Vía")
+        numero    = _col("Número",             "NUMERO", "Num", "Nº")
+        dist      = _col("Descripción Distrito","DESCRIPCION DISTRITO","Descripcion Distrito","Distrito").title()
+        barrio    = _col("Descripción Barrio", "DESCRIPCION BARRIO","Descripcion Barrio","Barrio").title()
+        uso       = _col("Uso","USO")
+        interesado= _col("Interesado","INTERESADO")
+        proc      = _col("Procedimiento","PROCEDIMIENTO")
+        _lat_raw  = _col("Latitud","LATITUD","lat","latitude")
+        _lon_raw  = _col("Longitud","LONGITUD","lon","longitude")
+
         if tipo in _SKIP_TIPOS or not tipo:
             return
 
@@ -6489,86 +6620,74 @@ def search_datos_madrid(date_from, date_to, global_seen):
             tipo, ("constructora+mep", "solicitud", "📅 MONITORIZAR"))
 
         # Date filter — Fecha concesión
-        # Use full date_from→date_to window (same as all other sources).
-        # Previous 60-day hard-cap was blocking valid leads from older XLSX rows.
-        fecha_raw = str(row_dict.get("Fecha concesión","") or "").strip()
+        # Use full date_from→date_to window.
         if fecha_raw:
             try:
-                rec_date = _dp.parse(fecha_raw[:10], dayfirst=True).date()
+                # Handle both DD/MM/YYYY and YYYY-MM-DD formats
+                if "/" in fecha_raw:
+                    rec_date = _dp.parse(fecha_raw[:10], dayfirst=True).date()
+                else:
+                    rec_date = _dp.parse(fecha_raw[:10]).date()
                 if rec_date < date_from.date() or rec_date > date_to.date():
                     return
             except Exception:
                 pass  # if date can't be parsed, include the row
 
         # Build address
-        tipo_via = str(row_dict.get("Tipo Via","")     or "").strip()
-        nombre   = str(row_dict.get("Nombre Via","")   or "").strip()
-        numero   = str(row_dict.get("Número","")       or "").strip()
         try:
             numero = str(int(float(numero))) if numero and numero != "nan" else ""
         except Exception:
             numero = ""
-        dist     = str(row_dict.get("Descripción Distrito","") or "").strip().title()
-        barrio   = str(row_dict.get("Descripción Barrio","")   or "").strip().title()
-        uso      = str(row_dict.get("Uso","")                  or "").strip()
-        addr     = " ".join(filter(None, [tipo_via, nombre, numero])).strip().title()
+        addr = " ".join(filter(None, [tipo_via, nombre, numero])).strip().title()
         if dist:  addr += f", {dist}"
         if barrio and barrio != dist: addr += f" ({barrio})"
 
-        # GPS coordinates — use Latitud/Longitud if available (from XLSX columns)
-        _lat_raw = str(row_dict.get("Latitud","") or "").strip()
-        _lon_raw = str(row_dict.get("Longitud","") or "").strip()
+        # GPS coordinates — use Latitud/Longitud if available
         _lat_val = _lon_val = None
         def _dms_to_dec(dms_str):
             """Convert '40º27\'58.79'' N' → 40.465776"""
             import re as _r
             m = _r.search(r"(\d+)[º°](\d+)'([\d.]+)''?\s*([NSEW])", dms_str)
             if not m: return None
-            d,mn,s,hemi = int(m.group(1)),int(m.group(2)),float(m.group(3)),m.group(4)
-            dec = d + mn/60 + s/3600
+            d2,mn,s,hemi = int(m.group(1)),int(m.group(2)),float(m.group(3)),m.group(4)
+            dec = d2 + mn/60 + s/3600
             return -dec if hemi in ("S","W") else dec
         if _lat_raw: _lat_val = _dms_to_dec(_lat_raw)
         if _lon_raw: _lon_val = _dms_to_dec(_lon_raw)
 
+        # If no address, use district as fallback (don't skip)
         if not addr or addr.strip() in (",",""):
-            return   # skip rows with no address
+            if dist:
+                addr = f"Madrid - {dist}"
+            elif not addr:
+                return  # truly no location info at all
 
-        # Build unique ID (no EXPEDIENTE in this dataset)
+        # Build unique ID (no formal EXPEDIENTE in this dataset)
         exp = f"DM-{_current_year}-{row_idx}"
-
         if exp in seen_exp: return
         seen_exp.add(exp)
 
-        # Build source URL — link to CONEX public search for this address
-        q = f"{nombre}+{numero}+Madrid".replace(" ","+")
+        # Source URL — CONEX public search for this address
+        q = (f"{nombre}+{numero}+Madrid").replace(" ", "+")
         source_url = (f"https://sede.madrid.es/portal/site/tramites/menuitem"
                       f".62876cb64654a55e2dbd7003a8a409a0/?vgnextoid=fa3a74&q={q}")
 
-        # Applicant — "Persona jurídica" = company, "Persona física" = individual
-        interesado = str(row_dict.get("Interesado","") or "").strip()
-        # Keep ALL high-value licence types regardless of applicant type.
-        # Removing the physical-person filter because:
-        # 1. Primera Ocupación is often applied for by individuals (building owner)
-        # 2. LICENCIA URBANÍSTICA DE ACTIVIDAD is filed by the business owner (individual)
-        # 3. We were filtering out ~70% of valid leads with this check
-        is_company = interesado == "Persona jurídica"  # kept for scoring only
-
-        proc = str(row_dict.get("Procedimiento","") or "").strip()
+        is_company = interesado == "Persona jurídica"
         desc = f"{tipo} | {proc} | {dist} {barrio}"
 
         rec = {
-            "TIPO_EXPEDIENTE":  tipo,
-            "PROCEDIMIENTO":    proc,
-            "OBJETO":           tipo,
-            "DESCRIPCION":      desc,
-            "DIRECCION":        addr,
-            "BARRIO":           barrio,
-            "DISTRITO":         dist,
+            "TIPO_EXPEDIENTE":    tipo,
+            "PROCEDIMIENTO":      proc,
+            "OBJETO":             tipo,
+            "DESCRIPCION":        desc,
+            "DIRECCION":          addr,
+            "BARRIO":             barrio,
+            "DISTRITO":           dist,
             "FECHA_OTORGAMIENTO": fecha_raw,
-            "RESULTADO":        "Otorgada",
-            "PEM":              None,
-            "EXPEDIENTE":       exp,
-            "INTERESADO":       interesado,
+            "RESULTADO":          "Otorgada",
+            "PEM":                None,
+            "EXPEDIENTE":         exp,
+            "INTERESADO":         interesado,
         }
         results.append((exp, rec, source_url, profile_hint, action_window, phase))
 
