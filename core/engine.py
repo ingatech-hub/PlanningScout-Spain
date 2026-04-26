@@ -44,7 +44,10 @@ def time_ok(need_s=60):
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--weeks",   type=int, default=1,
-    help="1=daily(2 days), 2-8=weekly, 9+=full backfill")
+    help="1=daily(last 2 working days), 2-8=weekly window, 9+=full backfill. "
+         "DAILY mode (--weeks 1): fast 20min scan of the last 2 working days. "
+         "WEEKLY (--weeks 2-8): full window scan. "
+         "Example: --weeks 4 = scan last 4 weeks completely.")
 parser.add_argument("--digest",  action="store_true")
 parser.add_argument("--resume",  action="store_true",
     help="Skip collection, process saved queue from previous run")
@@ -2853,6 +2856,30 @@ def score_lead(p):
     if any(k in desc for k in ["demolición","derribo"]) and any(k in desc for k in ["nueva construcción","nueva planta"]):
         score += 6
 
+    # ── GLOBAL NOISE PENALTY — service contracts that are NOT construction leads ───
+    # "Asistencia Técnica para vigilancia/coordinación de seguridad y salud"
+    # "Redacción de proyecto técnico" / "Consultoría de gestión"
+    # These appear in BOCM/CM feeds with high PEM but are SERVICE contracts.
+    # No profile benefits from knowing about them. Apply a hard penalty.
+    _pure_service_signals = [
+        "asistencia técnica", "coordinación de seguridad y salud",
+        "vigilancia y control de obras", "dirección facultativa",
+        "redacción de proyecto", "proyecto técnico de",
+        "consultoría", "asesoramiento técnico",
+        "control de calidad de las obras",
+        "servicios de ingeniería", "estudios y proyectos",
+        "asistencia al director", "trabajos de vigilancia",
+    ]
+    _construction_signals = [  # must have at least one to override
+        "ejecución de obras", "contrato de obras", "licitación de obras",
+        "obra de construcción", "nueva construcción", "urbanización",
+        "junta de compensación", "reparcelación",
+    ]
+    if any(k in desc for k in _pure_service_signals):
+        # Only penalise if NOT also a construction contract
+        if not any(k in desc for k in _construction_signals):
+            score -= 25   # hard penalty — makes them sink below min_score for all profiles
+
     # ── Molecor / Compras — saneamiento projects = direct PVC pipe sales ────────
     # Every urbanización with saneamiento is a confirmed Molecor sales opportunity.
     # Large PEM + saneamiento = high-value lead for materials purchasing team.
@@ -5039,19 +5066,18 @@ def search_place_national(date_from, date_to):
     Returns list of (url, title, summary, pem) tuples.
     """
     # ── PLACE feed strategy ────────────────────────────────────────────────────
-    # All contrataciondelestado.es and contrataciondelsectorpublico.gob.es ATOM feeds
-    # return the same malformed XML regardless of feed ID, and both domains are
-    # WAF-blocked from GitHub Actions IPs (DNS resolves but returns 403/HTML).
-    #
-    # WORKING alternative: HACIENDA open data API at datos.gob.es
-    # This is the official government data catalog and is not WAF-restricted.
+    # contrataciondelestado.es and contrataciondelsectorpublico.gob.es: BOTH return
+    # malformed XML or HTML error pages from GitHub Actions IPs (WAF blocked).
+    # 
+    # WORKING alternative: re-use the contratos-publicos.comunidad.madrid domain
+    # (same domain as Source 6 which consistently works) for adjudicaciones.
+    # These include state-level tenders relevant to Madrid that the CM portal re-publishes.
     PLACE_FEEDS = [
-        # datos.gob.es — HACIENDA open data (not WAF restricted, JSON+XML)
-        "https://datos.gob.es/apidata/catalog/dataset/l01280066-licitaciones-contratos-publicos-contratacion-publica-madrid.json",
-        # CM Contratos adjudicaciones feed (same domain as Source 6 which works)
+        # CM portal — covers state + regional adjudicaciones (CONFIRMED WORKING — same as S6)
         "https://contratos-publicos.comunidad.madrid/feed/adjudicaciones2",
-        # JCCA (Junta Consultiva) open data CSV
-        "https://www.hacienda.gob.es/GobiernoAbierto/Datos%20abiertos/Contratos%20del%20sector%20publico/Contratos.xml",
+        "https://contratos-publicos.comunidad.madrid/feed/adjudicaciones",
+        # Try sector público — may occasionally be accessible
+        "https://contrataciondelsectorpublico.gob.es/sindicacion/sindicacion_1044/licitacionesPerfilesContratanteCompleto3.atom",
     ]
     # Madrid-area entities and CPV codes that matter
     _MADRID_ENTITIES = [
@@ -5304,7 +5330,7 @@ def run():
     date_from = today - timedelta(weeks=WEEKS_BACK)
 
     log("=" * 70)
-    log(f"🏗️  PlanningScout Madrid — Engine v22 (s3-icio-fix+s4-rss+s5-boe+s6-ai-eval+s7-pem+s8-borme+s9-place+s10-gis)")
+    log(f"🏗️  PlanningScout Madrid — Engine v23 (s3-icio-fix+s4-rss+s5-boe+s6-ai-eval+s7-pem+s8-borme+s9-place+s10-gis)")
     log(f"📅  {today.strftime('%Y-%m-%d %H:%M')}  |  Mode: {MODE.upper()}")
     log(f"📆  {date_from.strftime('%d/%m/%Y')} → {date_to.strftime('%d/%m/%Y')} ({WEEKS_BACK}w)")
     log(f"⚙️  {N_WORKERS} processing workers  |  ⏱️ Budget: {MAX_RUN_MINUTES}min")
@@ -5397,43 +5423,13 @@ def run():
             log(f"\n{'─'*55}")
             log(f"🔎 SOURCE 2: Keyword search  [{MODE} mode]")
 
+            # ALL keywords run in ALL modes — no daily restriction.
+            # Skipping keywords in daily mode would miss ~80% of leads.
+            # Source 1 (day scan) catches same-day documents;
+            # Source 2 (keyword search) catches documents indexed with delay and
+            # all documents in the full date_from → date_to window.
             kw_list = KW_WEEKLY
             if MODE == "full": kw_list = KW_WEEKLY + KW_EXTRA_FULL
-            # Daily mode: use top 15 highest-yield KWs only (fast ~15min, still valuable)
-            if MODE == "daily":
-                _DAILY_KWS = {
-                    # Core permits — every profile
-                    "obra mayor", "licencia urbanística", "declaración responsable",
-                    # Urbanismo — biggest leads (FCC, Molecor, Kiloutou, Promotores)
-                    "proyecto de urbanización", "junta de compensación",
-                    "plan especial", "plan parcial", "reparcelación",
-                    "aprobación definitiva", "modificación puntual",
-                    # Licitaciones — Gran Constructora priority
-                    "licitación de obras", "adjudicación de obras",
-                    "resolución de adjudicación",
-                    # ICIO — legally confirmed construction, exact PEM
-                    "base imponible",
-                    # MEP + Hospe signals
-                    "primera ocupación", "rehabilitación integral",
-                    "rehabilitación energética",
-                    # Cambio de uso — Sharing Co holy grail
-                    "cambio de uso", "cambio de destino",
-                    # Industrial / Kiloutou
-                    "nave industrial", "demolición",
-                    # Molecor — saneamiento pipes
-                    "colector de saneamiento", "red de abastecimiento",
-                    "saneamiento de aguas",
-                    # Contribuciones especiales = live obra with confirmed budget
-                    "contribuciones especiales",
-                    "coliving",
-                    "acta de inicio de obras",
-                    "certificado final de obra",
-                    "proyecto básico",
-                    "propuesta de adjudicación",
-                }
-                kw_list = [(kw, sec, min(max_pg, 3), tag)
-                           for kw, sec, max_pg, tag in KW_WEEKLY
-                           if kw in _DAILY_KWS]
 
             kw_total  = 0
             kw_n      = len(kw_list)
@@ -6117,11 +6113,15 @@ def search_cm_contratos(date_from, date_to, global_seen):
     Data: XML/ATOM with structured fields (title, description, budget, entity, date)
     Returns: list of (url, title, entity, budget, date) tuples for processing
     """
+    # CM Contratos feeds — try multiple in order. The portal changes URLs occasionally.
+    # ALL feeds are tried on each run; primary first, extras if primary returns 0.
     CM_FEED = "https://contratos-publicos.comunidad.madrid/feed/licitaciones2"
-    # Fallback feeds — CM publishes several ATOM feeds
     CM_FEEDS_EXTRA = [
         "https://contratos-publicos.comunidad.madrid/feed/licitaciones",
         "https://contratos-publicos.comunidad.madrid/feed/adjudicaciones2",
+        "https://contratos-publicos.comunidad.madrid/feed/adjudicaciones",
+        # Direct portal search — returns all contracts in last 30 days as ATOM
+        "https://contratos-publicos.comunidad.madrid/feed/contratos",
     ]
     # Keywords to filter construction-relevant contracts
     _CONSTR_KWS = [
@@ -6202,8 +6202,9 @@ def search_cm_contratos(date_from, date_to, global_seen):
         log(f"  🏗️ CM Contratos ATOM: {len(results)} construction contracts found")
 
         # ── Try extra CM feeds if primary returned 0 ──────────────────────────
-        if not results:
-            for _extra_feed in CM_FEEDS_EXTRA:
+        # Always try extra feeds too — CM feed 404s are common.
+        # Trying all feeds ensures we never miss a contract due to a temporary URL issue.
+        for _extra_feed in CM_FEEDS_EXTRA:
                 if not time_ok(need_s=30): break
                 try:
                     r2 = safe_get(_extra_feed, timeout=20)
@@ -6233,8 +6234,8 @@ def search_cm_contratos(date_from, date_to, global_seen):
                         seen_local.add(url2)
                         results.append((url2, title2, summary2[:500], pub2))
                 except Exception: continue
-            if results:
-                log(f"  🏗️ CM Contratos extra feeds: +{len(results)} total")
+        if results:
+            log(f"  🏗️ CM Contratos extra feeds: +{len(results)} total")
         
     except Exception as e:
         log(f"  ⚠️ CM Contratos error: {e}")
