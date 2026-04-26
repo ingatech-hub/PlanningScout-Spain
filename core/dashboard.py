@@ -834,6 +834,23 @@ footer { visibility: hidden !important; }
 button:has(> div > p:contains("✓")) {
     color: #16a34a !important;
 }
+
+/* ── Selectbox: disable typing/editing (Streamlit 1.32+ made them searchable) ── */
+/* Users must use the dropdown — typing in the box causes confusion */
+div[data-baseweb="select"] input {
+    caret-color: transparent !important;
+    pointer-events: none !important;
+}
+div[data-baseweb="select"]:not([data-focused]) input {
+    user-select: none !important;
+    -webkit-user-select: none !important;
+}
+/* Also applies to all stSelectbox elements */
+[data-testid="stSelectbox"] input[type="text"],
+[data-testid="stSelectbox"] input[class*="Input"] {
+    caret-color: transparent !important;
+    pointer-events: none !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1880,6 +1897,213 @@ def build_card(row, is_watched=False, inside_details=False):
             "</div></details>"
         )
 
+    # ── SECTOR INTELLIGENCE PANEL — shown when sector columns have data ─────────
+    # Each profile gets its own collapsed panel with the specific fields the AI
+    # extracted. This renders only when the column has actual content.
+    # Fields are grouped by sector so users see only what's relevant to them.
+    _SIP = (  # sector intelligence panel row style
+        "display:flex;align-items:flex-start;gap:8px;padding:4px 0;border-bottom:1px solid #f1f5f9;"
+        "font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:12px;"
+    )
+    _SIPK = "color:#94a3b8;font-size:10.5px;min-width:140px;flex-shrink:0;padding-top:2px;"
+    _SIPV = "color:#334155;font-size:12px;line-height:1.5;flex:1;"
+
+    def _sip_row(key, val):
+        if not val or str(val).strip().lower() in ("", "nan", "none"): return ""
+        return (f'<div style="{_SIP}">'
+                f'<span style="{_SIPK}">{key}</span>'
+                f'<span style="{_SIPV}">{_html_esc.escape(str(val)[:200])}</span>'
+                f'</div>')
+
+    # Determine which sector panels to show based on row data presence
+    _sector_rows = []
+
+    # 🏗️ Gran Infraestructura fields
+    _infra_rows = [
+        ("CPV Codes",       row.get("infra_cpv_codes","")),
+        ("PBL (€)",         row.get("infra_pbl_eur","")),
+        ("Plazo oferta",    row.get("infra_deadline","")),
+        ("Criterios adj.",  row.get("infra_criteria","")),
+        ("Clasificación",   row.get("infra_clasificacion","")),
+        ("Procedimiento",   row.get("infra_procedure","")),
+        ("Órgano contrat.", row.get("infra_contracting_body","")),
+    ]
+    _infra_html = "".join(_sip_row(k, v) for k, v in _infra_rows)
+    if _infra_html:
+        _sector_rows.append(("🏗️ Licitación / Infraestructura", _infra_html))
+
+    # 🏢 Gran Constructora fields
+    _const_rows = [
+        ("Viviendas",       row.get("const_num_viviendas","")),
+        ("Uso previsto",    row.get("const_uso_previsto","")),
+        ("Tipología",       row.get("const_tipologia","")),
+        ("Aparejador",      row.get("const_aparejador","")),
+        ("Plazo ejecución", row.get("const_plazo_ejecucion","")),
+        ("CIF promotor",    row.get("const_promotor_cif","")),
+        ("Suelo contam.",   row.get("const_suelo_contaminado","")),
+    ]
+    _const_html = "".join(_sip_row(k, v) for k, v in _const_rows)
+    if _const_html:
+        _sector_rows.append(("🏢 Datos de construcción", _const_html))
+
+    # 🏪 Expansión Retail fields
+    _retail_rows = [
+        ("Población futura",     row.get("retail_pob_futura_est","")),
+        ("Renta per cápita",     row.get("retail_renta_capita","")),
+        ("Demanda retail (m²)",  row.get("retail_m2_comercial_est","")),
+        ("Zona tipo",            row.get("retail_zona_tipo","")),
+        ("Competencia 1km",      row.get("retail_competencia_1km","")),
+        ("Transporte",           row.get("retail_transporte","")),
+        ("Apertura estimada",    row.get("retail_apertura_est","")),
+        ("Local m²",             row.get("retail_local_m2","")),
+        ("Oportunidad retail",   row.get("retail_oportunidad","")),
+    ]
+    _retail_html = "".join(_sip_row(k, v) for k, v in _retail_rows)
+    if _retail_html:
+        _sector_rows.append(("🏪 Análisis Expansión Retail", _retail_html))
+
+    # 📐 Promotores / RE fields
+    _re_rows = [
+        ("Sup. total (m²)",      row.get("re_sup_total_m2","")),
+        ("Sup. edificable",      row.get("re_sup_edificable_m2","")),
+        ("Parcelas / propiet.",  row.get("re_num_parcelas","")),
+        ("Tipo de suelo",        row.get("re_tipo_suelo","")),
+        ("Junta contacto",       row.get("re_junta_contacto","")),
+        ("Cargas pendientes",    row.get("re_cargas_pendientes","")),
+        ("Suelo contam.",        row.get("re_suelo_contaminado","")),
+        ("Plazo urbanización",   row.get("re_plazo_urbanizacion","")),
+    ]
+    _re_html = "".join(_sip_row(k, v) for k, v in _re_rows)
+    if _re_html:
+        _sector_rows.append(("📐 Datos RE / Promotores", _re_html))
+
+    # 🔧 MEP Instaladores fields
+    _mep_rows = [
+        ("Plantas",         row.get("mep_num_plantas","")),
+        ("Superficie (m²)", row.get("mep_sup_m2","")),
+        ("HVAC estimado",   row.get("mep_hvac_est","")),
+        ("Ascensores",      row.get("mep_ascensores_est","")),
+        ("PCI tipo",        row.get("mep_pci_tipo","")),
+        ("Dir. técnico",    row.get("mep_director_tecnico","")),
+    ]
+    _mep_html = "".join(_sip_row(k, v) for k, v in _mep_rows)
+    if _mep_html:
+        _sector_rows.append(("🔧 Instalaciones MEP", _mep_html))
+
+    # 🏭 Industrial / Logística fields
+    _ind_rows = [
+        ("Parcela (m²)",    row.get("ind_sup_parcela_m2","")),
+        ("Nave (m²)",       row.get("ind_sup_nave_m2","")),
+        ("Altura libre",    row.get("ind_altura_libre_m","")),
+        ("Muelles est.",    row.get("ind_muelles_est","")),
+        ("Potencia (kVA)",  row.get("ind_potencia_kva","")),
+        ("Polígono",        row.get("ind_poligono_nombre","")),
+        ("Renta mercado",   row.get("ind_renta_mercado","")),
+        ("Yield est.",      row.get("ind_yield_est","")),
+    ]
+    _ind_html = "".join(_sip_row(k, v) for k, v in _ind_rows)
+    if _ind_html:
+        _sector_rows.append(("🏭 Industrial / Logística", _ind_html))
+
+    # 🚧 Alquiler Maquinaria fields — include urgency pill
+    _alq_urgencia = str(row.get("alq_urgencia","") or "").strip()
+    _alq_urg_pill = ""
+    if _alq_urgencia:
+        _urg_colors = {
+            "🔴": ("#fef2f2","#dc2626","#fecaca"),
+            "🟡": ("#fffbeb","#b45309","#fde68a"),
+            "🟢": ("#f0fdf4","#16a34a","#bbf7d0"),
+        }
+        _urg_col = next(((bg,tc,bd) for emoji,(bg,tc,bd) in _urg_colors.items() if emoji in _alq_urgencia), ("#f8fafc","#64748b","#e2e8f0"))
+        _alq_urg_pill = (
+            f'<div style="margin-bottom:8px;">'
+            f'<span style="font-size:12px;font-weight:700;padding:4px 12px;border-radius:20px;'
+            f'background:{_urg_col[0]};color:{_urg_col[1]};border:1px solid {_urg_col[2]};">'
+            f'{_alq_urgencia}</span></div>'
+        )
+    _alq_rows = [
+        ("Contratista",     row.get("alq_contratista","")),
+        ("Importe adj.",    row.get("alq_importe_adj","")),
+        ("Inicio obra est.",row.get("alq_inicio_obra_est","")),
+        ("Maquinaria est.", row.get("alq_maquinaria_est","")),
+        ("M³ tierras est.", row.get("alq_m3_tierras_est","")),
+        ("Duración",        row.get("alq_duracion_meses","")),
+        ("Jefe de obra",    row.get("alq_jefe_obra","")),
+    ]
+    _alq_html = "".join(_sip_row(k, v) for k, v in _alq_rows)
+    if _alq_urgencia or _alq_html:
+        _sector_rows.append(("🚧 Alquiler Maquinaria", _alq_urg_pill + _alq_html))
+
+    # 🛒 Compras / Materiales fields
+    _mat_rows = [
+        ("Colector DN (km)",  row.get("mat_colector_dn_km","")),
+        ("Red abast. (km)",   row.get("mat_red_abast_dn_km","")),
+        ("Pluviales (km)",    row.get("mat_pluviales_dn_km","")),
+        ("Hormigón (m³)",     row.get("mat_hormigon_m3_est","")),
+        ("Áridos (t)",        row.get("mat_aridos_t_est","")),
+        ("Acero B500S (t)",   row.get("mat_acero_t_est","")),
+        ("Contratista",       row.get("mat_contratista","")),
+    ]
+    _mat_html = "".join(_sip_row(k, v) for k, v in _mat_rows)
+    if _mat_html:
+        _sector_rows.append(("🛒 Cantidades de materiales", _mat_html))
+
+    # 💼 Contract & Oficinas fields
+    _cont_rows = [
+        ("Uso edificio",    row.get("cont_uso_edificio","")),
+        ("m² oficinas",     row.get("cont_m2_oficinas","")),
+        ("Puestos trabajo", row.get("cont_puestos_trabajo","")),
+        ("Plantas",         row.get("cont_num_plantas","")),
+        ("Arquitecto",      row.get("cont_arquitecto","")),
+        ("Certificación",   row.get("cont_certificacion","")),
+        ("Entrega est.",    row.get("cont_entrega_est","")),
+        ("Fit-out budget",  row.get("cont_fit_out_presupuesto_est","")),
+    ]
+    _cont_html = "".join(_sip_row(k, v) for k, v in _cont_rows)
+    if _cont_html:
+        _sector_rows.append(("💼 Contract & Oficinas", _cont_html))
+
+    # 🏠 Flexliving & Hostelería fields — include coliving potential pill
+    _flex_potencial = str(row.get("flex_potencial_coliving","") or "").strip()
+    _flex_pill = ""
+    if _flex_potencial:
+        _fp_col = ("#f0fdf4","#15803d","#bbf7d0") if "ALTO" in _flex_potencial.upper() else \
+                  ("#fffbeb","#b45309","#fde68a") if "MEDIO" in _flex_potencial.upper() else \
+                  ("#fef2f2","#dc2626","#fecaca")
+        _flex_pill = (
+            f'<div style="margin-bottom:8px;">'
+            f'<span style="font-size:12px;font-weight:700;padding:4px 12px;border-radius:20px;'
+            f'background:{_fp_col[0]};color:{_fp_col[1]};border:1px solid {_fp_col[2]};">'
+            f'Potencial coliving: {_flex_potencial}</span></div>'
+        )
+    _flex_rows = [
+        ("Año construcción", row.get("flex_anno_construccion","")),
+        ("Unidades",         row.get("flex_num_unidades","")),
+        ("Sup. total (m²)",  row.get("flex_sup_total_m2","")),
+        ("Uso anterior",     row.get("flex_uso_anterior","")),
+        ("Propietario tipo", row.get("flex_propietario_tipo","")),
+        ("Dist. metro",      row.get("flex_dist_metro_min","")),
+        ("IRR / Yield est.", row.get("flex_irr_est","")),
+    ]
+    _flex_html = "".join(_sip_row(k, v) for k, v in _flex_rows)
+    if _flex_potencial or _flex_html:
+        _sector_rows.append(("🏠 Flexliving & Hostelería", _flex_pill + _flex_html))
+
+    # Render all non-empty sector panels as collapsible dropdowns
+    for _sec_title, _sec_content in _sector_rows:
+        if not _sec_content.strip(): continue
+        extras_html += (
+            "<details><summary style='" + _SUM + "'>"
+            f"<span style='font-size:12px'>🔬</span>"
+            f"<span style='color:#64748b;font-weight:500;'>{_sec_title}</span>"
+            "<span style='margin-left:auto;font-size:10px;color:#94a3b8;'>▼</span>"
+            "</summary><div style='padding:8px 20px 14px 20px;'>"
+            f"<div style='background:#f8fafc;border-radius:10px;padding:10px 14px;'>"
+            f"{_sec_content}"
+            f"</div>"
+            "</div></details>"
+        )
+
     return (
         f'<div style="{SC}">'
         f'{head}'
@@ -2267,8 +2491,95 @@ COL_MAP = {
     "Action Window":       "action_window",
     "Key Contacts":        "key_contacts",
     "Obra Timeline":       "obra_timeline",
-    "Last Updated":        "last_updated",    # timestamp of last phase-advance upsert
-    "Previous Phase":      "previous_phase",  # phase before last update
+    "Last Updated":        "last_updated",
+    "Previous Phase":      "previous_phase",
+    "km M30":              "km_m30",
+    # ── Sector columns (HDRS_SECTOR) ── Gran Infraestructura
+    "infra_cpv_codes":     "infra_cpv_codes",
+    "infra_pbl_eur":       "infra_pbl_eur",
+    "infra_deadline":      "infra_deadline",
+    "infra_criteria":      "infra_criteria",
+    "infra_clasificacion": "infra_clasificacion",
+    "infra_procedure":     "infra_procedure",
+    "infra_contracting_body": "infra_contracting_body",
+    # Gran Constructora
+    "const_num_viviendas": "const_num_viviendas",
+    "const_uso_previsto":  "const_uso_previsto",
+    "const_tipologia":     "const_tipologia",
+    "const_promotor_cif":  "const_promotor_cif",
+    "const_aparejador":    "const_aparejador",
+    "const_plazo_ejecucion": "const_plazo_ejecucion",
+    "const_suelo_contaminado": "const_suelo_contaminado",
+    # Expansión Retail
+    "retail_pob_futura_est": "retail_pob_futura_est",
+    "retail_renta_capita":   "retail_renta_capita",
+    "retail_m2_comercial_est": "retail_m2_comercial_est",
+    "retail_competencia_1km": "retail_competencia_1km",
+    "retail_zona_tipo":      "retail_zona_tipo",
+    "retail_transporte":     "retail_transporte",
+    "retail_apertura_est":   "retail_apertura_est",
+    "retail_local_m2":       "retail_local_m2",
+    "retail_oportunidad":    "retail_oportunidad",
+    # Promotores / RE
+    "re_sup_total_m2":     "re_sup_total_m2",
+    "re_sup_edificable_m2": "re_sup_edificable_m2",
+    "re_num_parcelas":     "re_num_parcelas",
+    "re_junta_contacto":   "re_junta_contacto",
+    "re_cargas_pendientes": "re_cargas_pendientes",
+    "re_tipo_suelo":       "re_tipo_suelo",
+    "re_suelo_contaminado": "re_suelo_contaminado",
+    "re_plazo_urbanizacion": "re_plazo_urbanizacion",
+    # Instaladores MEP
+    "mep_num_plantas":     "mep_num_plantas",
+    "mep_sup_m2":          "mep_sup_m2",
+    "mep_hvac_est":        "mep_hvac_est",
+    "mep_ascensores_est":  "mep_ascensores_est",
+    "mep_pci_tipo":        "mep_pci_tipo",
+    "mep_director_tecnico": "mep_director_tecnico",
+    # Industrial / Log
+    "ind_sup_parcela_m2":  "ind_sup_parcela_m2",
+    "ind_sup_nave_m2":     "ind_sup_nave_m2",
+    "ind_altura_libre_m":  "ind_altura_libre_m",
+    "ind_muelles_est":     "ind_muelles_est",
+    "ind_potencia_kva":    "ind_potencia_kva",
+    "ind_poligono_nombre": "ind_poligono_nombre",
+    "ind_renta_mercado":   "ind_renta_mercado",
+    "ind_yield_est":       "ind_yield_est",
+    # Alquiler Maquinaria
+    "alq_contratista":     "alq_contratista",
+    "alq_importe_adj":     "alq_importe_adj",
+    "alq_inicio_obra_est": "alq_inicio_obra_est",
+    "alq_maquinaria_est":  "alq_maquinaria_est",
+    "alq_m3_tierras_est":  "alq_m3_tierras_est",
+    "alq_duracion_meses":  "alq_duracion_meses",
+    "alq_urgencia":        "alq_urgencia",
+    "alq_jefe_obra":       "alq_jefe_obra",
+    # Compras / Materiales
+    "mat_colector_dn_km":  "mat_colector_dn_km",
+    "mat_red_abast_dn_km": "mat_red_abast_dn_km",
+    "mat_pluviales_dn_km": "mat_pluviales_dn_km",
+    "mat_hormigon_m3_est": "mat_hormigon_m3_est",
+    "mat_aridos_t_est":    "mat_aridos_t_est",
+    "mat_acero_t_est":     "mat_acero_t_est",
+    "mat_contratista":     "mat_contratista",
+    # Contract & Oficinas
+    "cont_uso_edificio":   "cont_uso_edificio",
+    "cont_m2_oficinas":    "cont_m2_oficinas",
+    "cont_puestos_trabajo": "cont_puestos_trabajo",
+    "cont_num_plantas":    "cont_num_plantas",
+    "cont_arquitecto":     "cont_arquitecto",
+    "cont_certificacion":  "cont_certificacion",
+    "cont_entrega_est":    "cont_entrega_est",
+    "cont_fit_out_presupuesto_est": "cont_fit_out_presupuesto_est",
+    # Flexliving & Hostelería
+    "flex_anno_construccion": "flex_anno_construccion",
+    "flex_num_unidades":   "flex_num_unidades",
+    "flex_sup_total_m2":   "flex_sup_total_m2",
+    "flex_uso_anterior":   "flex_uso_anterior",
+    "flex_propietario_tipo": "flex_propietario_tipo",
+    "flex_dist_metro_min": "flex_dist_metro_min",
+    "flex_potencial_coliving": "flex_potencial_coliving",
+    "flex_irr_est":        "flex_irr_est",
 }
 
 @st.cache_data(ttl=300)
@@ -2938,10 +3249,10 @@ with _tab_leads:
                 )
             with _sort_col2:
                 _SORT_OPTIONS = {
-                    "relevancia":   "⭐ Relevancia",
-                    "puntuacion":   "📊 Puntuación",
-                    "fecha_desc":   "📅 Fecha ↓ (reciente)",
-                    "fecha_asc":    "📅 Fecha ↑ (antigua)",
+                    "relevancia":  "Relevancia",
+                    "puntuacion":  "Puntuación",
+                    "fecha_desc":  "Fecha ↓ reciente",
+                    "fecha_asc":   "Fecha ↑ antigua",
                 }
                 _sort_order = st.selectbox(
                     "Ordenar",
@@ -2963,6 +3274,12 @@ with _tab_leads:
             if "fecha_dt" in df_f.columns:
                 df_f = df_f.sort_values("fecha_dt", ascending=True).reset_index(drop=True)
         # "relevancia" keeps the existing sort (phase priority → display_score → pem)
+
+        # ── CRITICAL: inject _display_score into score_raw so the score circle
+        # matches the sort order. Without this, a 85-raw+15-boost lead shows "85 pts"
+        # but sorts above a "100 pts" lead with no boost — confusing to users.
+        if "_display_score" in df_f.columns:
+            df_f["score_raw"] = df_f["_display_score"]
 
         st.markdown('<div style="height:6px;border-bottom:1px solid #e2e8f0;margin-bottom:14px;"></div>',
                     unsafe_allow_html=True)
