@@ -835,6 +835,30 @@ button:has(> div > p:contains("✓")) {
     color: #16a34a !important;
 }
 
+
+/* ── Selectbox: disable typing COMPLETELY ── */
+/* Streamlit 1.30+ made all selectboxes searchable (users can type).
+   We override this for sort/filter selects — they should be pure dropdowns. */
+div[data-baseweb="select"] input[type="text"] {
+    caret-color: transparent !important;
+    pointer-events: none !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    cursor: default !important;
+}
+div[data-baseweb="select"] [data-testid="stSelectboxVirtualDropdown"] {
+    cursor: default !important;
+}
+/* For the sort selectbox specifically — styled as a pill button */
+.sort-select div[data-baseweb="select"] > div {
+    border-radius: 100px !important;
+    border: 1.5px solid #e2e8f0 !important;
+    background: #ffffff !important;
+    font-size: 12px !important;
+    min-height: 32px !important;
+    cursor: pointer !important;
+}
+
 /* ── Selectbox: disable typing/editing (Streamlit 1.32+ made them searchable) ── */
 /* Users must use the dropdown — typing in the box causes confusion */
 div[data-baseweb="select"] input {
@@ -2476,110 +2500,28 @@ def build_map(df_map, profile_key="general"):
 # DATA LOADING
 # ════════════════════════════════════════════════════════════
 COL_MAP = {
-    "Date Granted": "fecha", "Municipality": "municipio",
-    "Full Address": "direccion", "Applicant": "promotor",
-    "Permit Type": "tipo", "Declared Value PEM (€)": "pem_raw",
-    "Est. Build Value (€)": "est_raw", "Maps Link": "maps",
-    "Description": "descripcion", "Source URL": "bocm_url",
-    "PDF URL": "pdf_url", "Mode": "modo", "Confidence": "confianza",
-    "Date Found": "fecha_encontrado", "Lead Score": "score_raw",
-    "Expediente": "expediente", "Phase": "fase",
-    "AI Evaluation": "ai_evaluation", "Supplies Needed": "supplies_needed",
-    "Estimated PEM": "pem_est_raw",
-    "Profile Fit": "profile_fit", "Fuente": "fuente",
-    "Project Size":        "project_size",
-    "Action Window":       "action_window",
-    "Key Contacts":        "key_contacts",
-    "Obra Timeline":       "obra_timeline",
-    "Last Updated":        "last_updated",
-    "Previous Phase":      "previous_phase",
-    "km M30":              "km_m30",
-    # ── Sector columns (HDRS_SECTOR) ── Gran Infraestructura
-    "infra_cpv_codes":     "infra_cpv_codes",
-    "infra_pbl_eur":       "infra_pbl_eur",
-    "infra_deadline":      "infra_deadline",
-    "infra_criteria":      "infra_criteria",
-    "infra_clasificacion": "infra_clasificacion",
-    "infra_procedure":     "infra_procedure",
-    "infra_contracting_body": "infra_contracting_body",
-    # Gran Constructora
-    "const_num_viviendas": "const_num_viviendas",
-    "const_uso_previsto":  "const_uso_previsto",
-    "const_tipologia":     "const_tipologia",
-    "const_promotor_cif":  "const_promotor_cif",
-    "const_aparejador":    "const_aparejador",
-    "const_plazo_ejecucion": "const_plazo_ejecucion",
-    "const_suelo_contaminado": "const_suelo_contaminado",
-    # Expansión Retail
-    "retail_pob_futura_est": "retail_pob_futura_est",
-    "retail_renta_capita":   "retail_renta_capita",
-    "retail_m2_comercial_est": "retail_m2_comercial_est",
-    "retail_competencia_1km": "retail_competencia_1km",
-    "retail_zona_tipo":      "retail_zona_tipo",
-    "retail_transporte":     "retail_transporte",
-    "retail_apertura_est":   "retail_apertura_est",
-    "retail_local_m2":       "retail_local_m2",
-    "retail_oportunidad":    "retail_oportunidad",
-    # Promotores / RE
-    "re_sup_total_m2":     "re_sup_total_m2",
-    "re_sup_edificable_m2": "re_sup_edificable_m2",
-    "re_num_parcelas":     "re_num_parcelas",
-    "re_junta_contacto":   "re_junta_contacto",
-    "re_cargas_pendientes": "re_cargas_pendientes",
-    "re_tipo_suelo":       "re_tipo_suelo",
-    "re_suelo_contaminado": "re_suelo_contaminado",
-    "re_plazo_urbanizacion": "re_plazo_urbanizacion",
-    # Instaladores MEP
-    "mep_num_plantas":     "mep_num_plantas",
-    "mep_sup_m2":          "mep_sup_m2",
-    "mep_hvac_est":        "mep_hvac_est",
-    "mep_ascensores_est":  "mep_ascensores_est",
-    "mep_pci_tipo":        "mep_pci_tipo",
-    "mep_director_tecnico": "mep_director_tecnico",
-    # Industrial / Log
-    "ind_sup_parcela_m2":  "ind_sup_parcela_m2",
-    "ind_sup_nave_m2":     "ind_sup_nave_m2",
-    "ind_altura_libre_m":  "ind_altura_libre_m",
-    "ind_muelles_est":     "ind_muelles_est",
-    "ind_potencia_kva":    "ind_potencia_kva",
-    "ind_poligono_nombre": "ind_poligono_nombre",
-    "ind_renta_mercado":   "ind_renta_mercado",
-    "ind_yield_est":       "ind_yield_est",
-    # Alquiler Maquinaria
-    "alq_contratista":     "alq_contratista",
-    "alq_importe_adj":     "alq_importe_adj",
-    "alq_inicio_obra_est": "alq_inicio_obra_est",
-    "alq_maquinaria_est":  "alq_maquinaria_est",
-    "alq_m3_tierras_est":  "alq_m3_tierras_est",
-    "alq_duracion_meses":  "alq_duracion_meses",
-    "alq_urgencia":        "alq_urgencia",
-    "alq_jefe_obra":       "alq_jefe_obra",
-    # Compras / Materiales
-    "mat_colector_dn_km":  "mat_colector_dn_km",
-    "mat_red_abast_dn_km": "mat_red_abast_dn_km",
-    "mat_pluviales_dn_km": "mat_pluviales_dn_km",
-    "mat_hormigon_m3_est": "mat_hormigon_m3_est",
-    "mat_aridos_t_est":    "mat_aridos_t_est",
-    "mat_acero_t_est":     "mat_acero_t_est",
-    "mat_contratista":     "mat_contratista",
-    # Contract & Oficinas
-    "cont_uso_edificio":   "cont_uso_edificio",
-    "cont_m2_oficinas":    "cont_m2_oficinas",
-    "cont_puestos_trabajo": "cont_puestos_trabajo",
-    "cont_num_plantas":    "cont_num_plantas",
-    "cont_arquitecto":     "cont_arquitecto",
-    "cont_certificacion":  "cont_certificacion",
-    "cont_entrega_est":    "cont_entrega_est",
-    "cont_fit_out_presupuesto_est": "cont_fit_out_presupuesto_est",
-    # Flexliving & Hostelería
-    "flex_anno_construccion": "flex_anno_construccion",
-    "flex_num_unidades":   "flex_num_unidades",
-    "flex_sup_total_m2":   "flex_sup_total_m2",
-    "flex_uso_anterior":   "flex_uso_anterior",
-    "flex_propietario_tipo": "flex_propietario_tipo",
-    "flex_dist_metro_min": "flex_dist_metro_min",
-    "flex_potencial_coliving": "flex_potencial_coliving",
-    "flex_irr_est":        "flex_irr_est",
+    # Engine v29: 21 core columns — sector intelligence in AI Evaluation field
+    "Date Granted":           "fecha",
+    "Municipality":           "municipio",
+    "Full Address":           "direccion",
+    "Applicant":              "promotor",
+    "Permit Type":            "tipo",
+    "Declared Value PEM (€)": "pem_raw",
+    "Est. Build Value (€)":   "est_raw",
+    "Maps Link":              "maps",
+    "Description":            "descripcion",
+    "Source URL":             "bocm_url",
+    "PDF URL":                "pdf_url",
+    "Mode":                   "modo",
+    "Confidence":             "confianza",
+    "Date Found":             "fecha_encontrado",
+    "Lead Score":             "score_raw",
+    "Expediente":             "expediente",
+    "Phase":                  "fase",
+    "Estimated PEM":          "pem_est_raw",
+    "AI Evaluation":          "ai_evaluation",
+    "Supplies Needed":        "supplies_needed",
+    "Profile Fit":            "profile_fit",
 }
 
 @st.cache_data(ttl=300)
@@ -3251,8 +3193,8 @@ with _tab_leads:
                 _SORT_OPTIONS = {
                     "relevancia":  "Relevancia",
                     "puntuacion":  "Puntuación",
-                    "fecha_desc":  "Fecha ↓ reciente",
-                    "fecha_asc":   "Fecha ↑ antigua",
+                    "fecha_desc":  "Fecha más reciente",
+                    "fecha_asc":  "Fecha más antigua",
                 }
                 _sort_order = st.selectbox(
                     "Ordenar",
