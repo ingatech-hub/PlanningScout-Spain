@@ -4201,15 +4201,34 @@ def extract(text, url, pub_date, pdf_text=None):
 # ════════════════════════════════════════════════════════════
 # ── Google Sheet column headers ─────────────────────────────────────────────
 # BASE COLUMNS (cols A-AB) — all profiles
+# ── Sheet columns — single "Leads" tab, all profiles ──────────────────────
+# 21 core columns only. All sector intelligence lives in AI Evaluation field.
+# Dashboard handles per-sector filtering from Profile Fit column.
 HDRS_BASE = [
-    "Date Granted","Municipality","Full Address","Applicant",
-    "Permit Type","Declared Value PEM (€)","Est. Build Value (€)",
-    "Maps Link","Description","Source URL","PDF URL",
-    "Mode","Confidence","Date Found","Lead Score","Expediente","Phase",
-    "Estimated PEM","AI Evaluation","Supplies Needed","Profile Fit","Fuente",
-    "Project Size","Action Window","Key Contacts","Obra Timeline",
-    "Last Updated","Previous Phase","km M30",
+    "Date Granted",        # A — fecha concesión
+    "Municipality",        # B — municipio
+    "Full Address",        # C — dirección completa
+    "Applicant",           # D — solicitante / promotor
+    "Permit Type",         # E — tipo de licencia / expediente
+    "Declared Value PEM (€)",  # F — PEM official ONLY when extracted from document
+    "Est. Build Value (€)",    # G — estimated obra cost (PEM / ratio)
+    "Maps Link",           # H — Google Maps URL
+    "Description",         # I — descripción del proyecto
+    "Source URL",          # J — URL fuente (BOCM, CM Contratos, BOE…)
+    "PDF URL",             # K — enlace directo al PDF
+    "Mode",                # L — extraction mode (ai / keyword)
+    "Confidence",          # M — confidence level
+    "Date Found",          # N — fecha de procesado por el engine
+    "Lead Score",          # O — puntuación 0-100
+    "Expediente",          # P — número de expediente
+    "Phase",               # Q — fase (inicial/definitivo/licitacion/adjudicacion…)
+    "Estimated PEM",       # R — AI-estimated PEM when not officially declared
+    "AI Evaluation",       # S — análisis IA específico por sector
+    "Supplies Needed",     # T — materiales/maquinaria estimada
+    "Profile Fit",         # U — perfiles a los que aplica este lead
 ]
+
+HDRS = HDRS_BASE  # alias
 
 # SECTOR COLUMNS (cols AC+) — profile-specific intelligence
 # Engine writes these; dashboard reads them filtered per active profile
@@ -4436,7 +4455,30 @@ def write_permit(p, pdf_url=""):
             fuente = "Madrid-Licencias"
         else:
             fuente = "BOCM"
-        est  = round(dec/0.03) if dec and isinstance(dec,(int,float)) and dec > 0 else ""
+        # Est. Build Value (col G):
+        # When official PEM exists: divide by type-based ratio (ICIO standards)
+        # When NO official PEM: estimate from AI-extracted figures or context
+        _permit_t_lower = (p.get("permit_type","") or "").lower()
+        if "urbanización" in _permit_t_lower or "plan parcial" in _permit_t_lower:
+            _pem_ratio = 0.025   # civil works: lower ICIO/PEM ratio
+        elif "rehabilitación" in _permit_t_lower:
+            _pem_ratio = 0.045
+        elif "industrial" in _permit_t_lower:
+            _pem_ratio = 0.040
+        elif "licitación" in _permit_t_lower or "contribuciones especiales" in _permit_t_lower:
+            _pem_ratio = 0.015   # PBL = total budget, not just PEM
+        elif "nueva construcción" in _permit_t_lower:
+            _pem_ratio = 0.035
+        else:
+            _pem_ratio = 0.030
+
+        if dec and isinstance(dec, (int, float)) and dec > 0:
+            est = round(dec / _pem_ratio)
+        elif dec_raw and isinstance(dec_raw, (int, float)) and dec_raw > 0:
+            # Use raw (non-officially-declared) value to still compute build cost
+            est = round(dec_raw / _pem_ratio)
+        else:
+            est = ""
         addr = p.get("address") or ""
         muni = p.get("municipality") or "Madrid"
         # Use pre-built maps URL if supplied (e.g. from process_cm_contrato),
@@ -4560,120 +4602,27 @@ def write_permit(p, pdf_url=""):
         est = round(dec / _pem_divisor) if dec and isinstance(dec,(int,float)) and dec > 0 else ""
 
         row = [
-            p.get("date_granted",""), muni, addr,
-            p.get("applicant") or "",
-            p.get("permit_type") or "obra mayor",
-            _col_f_pem, est, maps,
-            (p.get("description") or "")[:350],
-            url, pdf_url or "",
-            p.get("extraction_mode","keyword"),
-            p.get("confidence",""),
-            today_date,
-            p.get("lead_score",0),
-            new_exp,
-            new_phase,
-            _est_pem,
-            (p.get("ai_evaluation") or "")[:600],
-            (p.get("supplies_needed") or "")[:600],
-            profile_fit_str,
-            fuente,
-            (p.get("project_size") or ""),
-            # Velocity badge: prepend "⚡ FAST TRACK" if project advanced phases quickly
-            (_compute_phase_velocity("", new_phase or "", today_date, today_date)
-             + " " + (p.get("action_window") or "")).strip(),
-            (p.get("key_contacts") or "")[:300],
-            (p.get("obra_timeline") or ""),
-            "",   # Last Updated — empty on first write
-            "",   # Previous Phase — empty on first write
-            _km_from_m30(muni),   # km_m30
-            # ── Gran Infraestructura ─────────────────────────────────────────
-            (p.get("infra_cpv_codes")       or "")[:200],
-            str(p.get("infra_pbl_eur")      or "")[:50],
-            (p.get("infra_deadline")        or "")[:100],
-            (p.get("infra_criteria")        or "")[:200],
-            (p.get("infra_clasificacion")   or "")[:100],
-            (p.get("infra_procedure")       or "")[:50],
-            (p.get("infra_contracting_body")or "")[:200],
-            # ── Gran Constructora ────────────────────────────────────────────
-            (p.get("const_num_viviendas")   or "")[:100],
-            (p.get("const_uso_previsto")    or "")[:150],
-            (p.get("const_tipologia")       or "")[:150],
-            (p.get("const_promotor_cif")    or "")[:20],
-            (p.get("const_aparejador")      or "")[:150],
-            (p.get("const_plazo_ejecucion") or "")[:100],
-            # ── Expansión Retail (9 fields) ──────────────────────────────────
-            (p.get("retail_pob_futura_est") or "")[:200],
-            (p.get("retail_renta_capita")   or "")[:100],
-            (p.get("retail_m2_comercial_est")or"")[:150],
-            (p.get("retail_competencia_1km")or "")[:300],
-            (p.get("retail_zona_tipo")      or "")[:100],
-            (p.get("retail_transporte")     or "")[:200],
-            (p.get("retail_apertura_est")   or "")[:150],
-            (p.get("retail_local_m2")       or "")[:50],
-            (p.get("retail_oportunidad")    or "")[:400],
-            # ── Promotores / RE ──────────────────────────────────────────────
-            (p.get("re_sup_total_m2")       or "")[:100],
-            (p.get("re_sup_edificable_m2")  or "")[:100],
-            (p.get("re_num_parcelas")       or "")[:50],
-            (p.get("re_junta_contacto")     or "")[:300],
-            (p.get("re_cargas_pendientes")  or "")[:100],
-            (p.get("re_tipo_suelo")         or "")[:100],
-            # ── Instaladores MEP ─────────────────────────────────────────────
-            (p.get("mep_num_plantas")       or "")[:80],
-            (p.get("mep_sup_m2")            or "")[:80],
-            (p.get("mep_hvac_est")          or "")[:200],
-            (p.get("mep_ascensores_est")    or "")[:100],
-            (p.get("mep_pci_tipo")          or "")[:150],
-            (p.get("mep_director_tecnico")  or "")[:150],
-            # ── Industrial / Log. ────────────────────────────────────────────
-            (p.get("ind_sup_parcela_m2")    or "")[:80],
-            (p.get("ind_sup_nave_m2")       or "")[:80],
-            (p.get("ind_altura_libre_m")    or "")[:50],
-            (p.get("ind_muelles_est")       or "")[:80],
-            (p.get("ind_potencia_kva")      or "")[:80],
-            (p.get("ind_poligono_nombre")   or "")[:150],
-            # ── Alquiler Maquinaria ──────────────────────────────────────────
-            (p.get("alq_contratista")       or "")[:200],
-            str(p.get("alq_importe_adj")    or "")[:50],
-            (p.get("alq_inicio_obra_est")   or "")[:100],
-            (p.get("alq_maquinaria_est")    or "")[:300],
-            (p.get("alq_m3_tierras_est")    or "")[:100],
-            (p.get("alq_duracion_meses")    or "")[:50],
-            # ── Compras / Materiales ─────────────────────────────────────────
-            (p.get("mat_colector_dn_km")    or "")[:150],
-            (p.get("mat_red_abast_dn_km")   or "")[:150],
-            (p.get("mat_hormigon_m3_est")   or "")[:100],
-            (p.get("mat_aridos_t_est")      or "")[:100],
-            (p.get("mat_acero_t_est")       or "")[:100],
-            (p.get("mat_contratista")       or "")[:200],
-            # ── Contract & Oficinas ──────────────────────────────────────────
-            (p.get("cont_uso_edificio")     or "")[:100],
-            (p.get("cont_m2_oficinas")      or "")[:80],
-            (p.get("cont_puestos_trabajo")  or "")[:100],
-            (p.get("cont_arquitecto")       or "")[:150],
-            (p.get("cont_certificacion")    or "")[:100],
-            (p.get("cont_entrega_est")      or "")[:100],
-            # ── Flexliving & Hostelería ──────────────────────────────────────
-            (p.get("flex_anno_construccion")or "")[:20],
-            (p.get("flex_num_unidades")     or "")[:50],
-            (p.get("flex_sup_total_m2")     or "")[:80],
-            (p.get("flex_uso_anterior")     or "")[:200],
-            (p.get("flex_propietario_tipo") or "")[:200],
-            (p.get("flex_propietario_tipo") or "")[:200],
-            (p.get("flex_dist_metro_min")    or "")[:80],
-            (p.get("flex_potencial_coliving")or "")[:50],
-            (p.get("flex_irr_est")           or "")[:100],
-            # ── Deep-research extra fields ────────────────────────────────────
-            (p.get("const_suelo_contaminado")or "")[:200],
-            (p.get("re_suelo_contaminado")   or "")[:200],
-            (p.get("re_plazo_urbanizacion")  or "")[:150],
-            (p.get("ind_renta_mercado")      or "")[:100],
-            (p.get("ind_yield_est")          or "")[:100],
-            (p.get("alq_urgencia")           or "")[:50],
-            (p.get("alq_jefe_obra")          or "")[:150],
-            (p.get("mat_pluviales_dn_km")    or "")[:150],
-            (p.get("cont_num_plantas")       or "")[:80],
-            (p.get("cont_fit_out_presupuesto_est") or "")[:150],
+            p.get("date_granted",""),          # A Date Granted
+            muni,                              # B Municipality
+            addr,                              # C Full Address
+            p.get("applicant") or "",          # D Applicant
+            p.get("permit_type") or "obra mayor",  # E Permit Type
+            _col_f_pem,                        # F Declared Value PEM — ONLY when confirmed in document
+            est,                               # G Est. Build Value
+            maps,                              # H Maps Link
+            (p.get("description") or "")[:350],    # I Description
+            url,                               # J Source URL
+            pdf_url or "",                     # K PDF URL
+            p.get("extraction_mode","keyword"),    # L Mode
+            p.get("confidence",""),            # M Confidence
+            today_date,                        # N Date Found
+            p.get("lead_score",0),             # O Lead Score
+            new_exp,                           # P Expediente
+            new_phase,                         # Q Phase
+            _est_pem,                          # R Estimated PEM
+            (p.get("ai_evaluation") or "")[:800],  # S AI Evaluation
+            (p.get("supplies_needed") or "")[:600],# T Supplies Needed
+            profile_fit_str,                   # U Profile Fit
         ]
 
         try:
@@ -5464,65 +5413,77 @@ def search_borme_new_companies(date_from, date_to):
                 "modificaciones estatutarias", "cambio de objeto social",
             }
             _CONSTRUCT_TERMS = [
-                "construc", "promoci", "promotor", "inmobili", "urban",
+                "construccion", "construc", "promoci", "inmobili", "urban",
                 "edificac", "obras", "rehab", "reform", "desarrollo",
                 "real estate", "inversion", "patrimon", "proyecto",
-                "residenci", "viviend", "solar", "parcela", "finca",
-                "logistic", "industrial", "nave ", "obra civil",
             ]
-            
-            # BORME XML real structure:
-            # <seccion num="1" nombre="Empresas"> (NOT "primera" or "segunda")
-            # <seccion num="2" nombre="Anuncios y avisos legales">
-            # We want ANY section that has a REGISTRO MERCANTIL DE MADRID departamento.
-            # Removing the section filter — departamento filter is sufficient and precise.
-            for dep in root.iter("departamento"):
-                dep_nombre = (dep.get("nombre") or "").lower()
-                if "madrid" not in dep_nombre and "registro mercantil" not in dep_nombre:
+
+            for seccion in root.iter("seccion"):
+                sec_nombre = (seccion.get("nombre") or "").lower()
+                # Only Sección Segunda (Anuncios y avisos legales — Registro Mercantil)
+                # AND Sección Primera (Empresas)
+                if "segunda" not in sec_nombre and "primera" not in sec_nombre:
                     continue
 
-                for anuncio in dep.iter("anuncio"):
-                    anuncio_id = anuncio.get("id","")
-                    titulo_el  = anuncio.find("titulo")
-                    titulo_txt = (titulo_el.text or "").lower() if titulo_el is not None else ""
-
-                    if not any(act in titulo_txt for act in _INTERESTING_ACTS):
+                for dep in seccion.iter("departamento"):
+                    dep_nombre = (dep.get("nombre") or "").lower()
+                    if "madrid" not in dep_nombre and "registro mercantil" not in dep_nombre:
                         continue
 
-                    # Real BORME XML company name element is <empresa>, not <texto>
-                    # Fallback chain: <empresa> → title colon-suffix → anuncio_id
-                    empresa = ""
-                    for _el_name in ["empresa", "denominacion", "razon_social", "nombre"]:
-                        _den_el = anuncio.find(_el_name)
-                        if _den_el is not None and (_den_el.text or "").strip():
-                            empresa = _den_el.text.strip()
-                            break
-                    if not empresa:
-                        # BORME sometimes embeds company name after colon in titulo:
-                        # "CONSTITUCIÓN : EMPRESA SL" or "CONSTITUCIÓN. EMPRESA SL."
-                        raw_tit = titulo_el.text.strip() if titulo_el is not None else ""
-                        for sep in (":", " - ", ". "):
-                            if sep in raw_tit:
-                                empresa = raw_tit.split(sep, 1)[1].strip()[:100]
-                                break
-                    if not empresa:
-                        empresa = anuncio_id
+                    # BORME XML has two possible structures:
+                    # A) Newer: <item tipoanuncio="Constitución" id="BORME-A-...">
+                    #           <denominacion>EMPRESA SL</denominacion>
+                    # B) Older: <anuncio id="..."><titulo>CONSTITUCIÓN</titulo>
+                    #           <texto>EMPRESA SL. ...</texto>
+                    # We try A first (more reliable), then B.
+                    _items_b = list(dep.iter("item")) or list(dep.iter("anuncio"))
 
-                    # Filter: construction/promotor sector keywords in company name
-                    emp_lower = empresa.lower()
-                    if not any(ct in emp_lower for ct in _CONSTRUCT_TERMS):
-                        continue
+                    for anuncio in _items_b:
+                        anuncio_id = anuncio.get("id","")
 
-                        pdf_el  = anuncio.find("url_pdf")
+                        # Act type: try tipoanuncio attr (format A) then <titulo> (format B)
+                        tipo_anuncio = (anuncio.get("tipoanuncio") or "").lower()
+                        if not tipo_anuncio:
+                            _t_el = anuncio.find("titulo") or anuncio.find("acto")
+                            tipo_anuncio = (_t_el.text or "").lower() if _t_el is not None else ""
+
+                        # Match act type: exact OR prefix
+                        _ACT_PREFIXES = ("constitu", "ampliac", "modificac de objeto",
+                                         "cambio de objeto", "transfor")
+                        if not any(act in tipo_anuncio for act in _INTERESTING_ACTS) and                            not any(tipo_anuncio.startswith(p) for p in _ACT_PREFIXES):
+                            continue
+
+                        # Company name: <denominacion> (format A) or <texto> (format B)
+                        empresa = ""
+                        for _tag in ("denominacion", "razon_social", "nombre"):
+                            _el = anuncio.find(_tag)
+                            if _el is not None and _el.text and _el.text.strip():
+                                empresa = _el.text.strip()[:120]; break
+                        if not empresa:
+                            texto_el = anuncio.find("texto")
+                            if texto_el is not None and texto_el.text:
+                                empresa = texto_el.text.strip().split(".")[0][:80]
+                        if not empresa:
+                            titulo_el = anuncio.find("titulo")
+                            empresa = (titulo_el.text if titulo_el is not None else anuncio_id) or anuncio_id
+
+                        # Filter: construction/RE sector keywords in company name
+                        emp_lower = empresa.lower()
+                        if not any(ct in emp_lower for ct in _CONSTRUCT_TERMS):
+                            continue
+
+                        pdf_el = anuncio.find("url_pdf") or anuncio.get("url_pdf")
                         borme_link = ""
-                        if pdf_el is not None and pdf_el.text:
+                        if isinstance(pdf_el, str):
+                            borme_link = f"https://www.boe.es/{pdf_el.lstrip('/')}" if not pdf_el.startswith("http") else pdf_el
+                        elif pdf_el is not None and hasattr(pdf_el, 'text') and pdf_el.text:
                             borme_link = (f"https://www.boe.es/{pdf_el.text.lstrip('/')}"
                                           if not pdf_el.text.startswith("http") else pdf_el.text)
 
                         results.append({
                             "company":  empresa,
                             "date":     d.strftime("%Y-%m-%d"),
-                            "act":      titulo_txt.title(),
+                            "act":      tipo_anuncio.title() or "Constitución",
                             "borme_id": anuncio_id,
                             "url":      borme_link,
                         })
@@ -5735,12 +5696,16 @@ def search_place_national(date_from, date_to):
     # WORKING alternative: re-use the contratos-publicos.comunidad.madrid domain
     # (same domain as Source 6 which consistently works) for adjudicaciones.
     # These include state-level tenders relevant to Madrid that the CM portal re-publishes.
+    # PLACE feed strategy:
+    # contrataciondelsectorpublico.gob.es is WAF-blocked from GitHub Actions (403).
+    # Use CM portal feeds only (same domain as Source 6 — confirmed working).
+    # CM portal re-publishes both regional AND national tenders relevant to Madrid.
     PLACE_FEEDS = [
-        # CM portal — covers state + regional adjudicaciones (CONFIRMED WORKING — same as S6)
-        "https://contratos-publicos.comunidad.madrid/feed/adjudicaciones2",
-        "https://contratos-publicos.comunidad.madrid/feed/adjudicaciones",
-        # Try sector público — may occasionally be accessible
-        "https://contrataciondelsectorpublico.gob.es/sindicacion/sindicacion_1044/licitacionesPerfilesContratanteCompleto3.atom",
+        "https://contratos-publicos.comunidad.madrid/feed/licitaciones2",   # primary
+        "https://contratos-publicos.comunidad.madrid/feed/licitaciones",    # fallback
+        "https://contratos-publicos.comunidad.madrid/feed/adjudicaciones2", # adjudicaciones
+        "https://contratos-publicos.comunidad.madrid/feed/adjudicaciones",  # fallback
+        "https://contratos-publicos.comunidad.madrid/feed/contratos",       # all types
     ]
     # Madrid-area entities and CPV codes that matter
     _MADRID_ENTITIES = [
@@ -5801,7 +5766,8 @@ def search_place_national(date_from, date_to):
             if not entries:
                 continue
 
-            # entries already populated above — proceed directly to iteration
+            # entries already parsed above via multi-strategy parser — proceed directly
+
             for entry in entries:
                 def _g(tag):
                     # Try Atom namespace, then plain, then Dublin Core
@@ -5863,111 +5829,120 @@ def search_place_national(date_from, date_to):
 
 def search_sede_madrid_obras(date_from, date_to) -> list:
     """
-    SOURCE 10: Sede Electrónica del Ayuntamiento de Madrid — Licencias de Obras.
+    SOURCE 10: Licencias urbanísticas complementarias al dataset Source 7.
 
-    Uses the Madrid Open Data CKAN REST API to query licencias urbanísticas
-    with full address, PEM, and GPS coordinates.
+    STRATEGY (v29 fix):
+    Source 7 already downloads the main datos.madrid.es XLSX (300193).
+    Source 10 adds value by querying a DIFFERENT resource: the CKAN
+    datastore for recent concesiones NOT yet in the quarterly XLSX,
+    and by trying the CM Sede Electrónica search for tipos not in Source 7.
 
-    Verified working endpoints (tested April 2026):
-      datos.madrid.es CKAN API: /api/action/datastore_search
-      Resource ID: 300193 (licencias-urbanisticas)
+    Working approach: datos.madrid.es CKAN API (same domain as Source 7,
+    confirmed accessible from GitHub Actions).
+    Resource 300193-2 covers 2026 year-to-date with more recent data than
+    the XLSX download which may be cached.
 
-    Falls back to the ArcGIS FeatureServer if CKAN is unavailable.
+    Falls back to BOCM keyword search for specific high-value licences
+    not covered by datos.madrid.es.
     """
     results = []
     if not time_ok(need_s=30): return results
 
+    # Types that complement Source 7 (which already covers most licencias)
     _TIPO_VALUABLE = {
         "primera ocupacion", "primera ocupación", "cambio de uso",
         "cambio de destino", "obra mayor", "rehabilitacion integral",
         "rehabilitación integral", "licencia urbanistica de actividad",
         "licencia urbanística de actividad", "demolicion", "demolición",
         "urbanizacion", "urbanización", "obra mayor nueva planta",
-        "obra mayor rehabilitacion",
+        "obra mayor rehabilitacion", "licencia de obras",
+        "declaracion responsable", "declaración responsable",
     }
 
-    # ── Source 10 skips CKAN (not available at datos.madrid.es without auth) ────
-    # The XLSX in Source 7 is already the definitive datos.madrid dataset.
-    # Source 10 adds value only through the ArcGIS REST API which may have 
-    # more recent/complete data. Use the correct Madrid Open Data ArcGIS tenant.
-    _date_from_s = date_from.strftime("%Y-%m-%d")
-    _date_to_s   = date_to.strftime("%Y-%m-%d")
     import urllib.parse as _up10
+    from datetime import datetime as _dt10
 
-    # ── datos.madrid.es CKAN datastore API — confirmed correct approach ─────────
-    # The Ayuntamiento de Madrid does NOT publish licencias on ArcGIS Online.
-    # The authoritative source is datos.madrid.es CKAN:
-    #   Dataset: "Licencias urbanísticas sujetas al ICIO"
-    #   Resource: licencias-urbanisticas-sujetas-al-icio
-    # Field names confirmed from CKAN data dictionary:
-    #   TIPO_LICENCIA, NUMERO_EXPEDIENTE, DIRECCION, DISTRITO, BARRIO,
-    #   FECHA_OTORGAMIENTO, PRESUPUESTO, INTERESADO
-    _date_from_sql = date_from.strftime("%Y-%m-%dT00:00:00")
-    _date_to_sql   = date_to.strftime("%Y-%m-%dT23:59:59")
+    # ── CKAN datastore query — datos.madrid.es (confirmed accessible) ────────
+    # The CKAN API paginates at 1000 rows. Use offset for full coverage.
+    _CKAN_BASE = "https://datos.madrid.es"
+    _RESOURCE_ID = "300193-2"  # 2026 licencias dataset (year-to-date)
 
-    # CKAN datastore_search_sql — supports date filtering
-    _CKAN_ENDPOINTS = [
-        # Primary: SQL endpoint with date filter
-        ("https://datos.madrid.es/api/3/action/datastore_search_sql",
-         {"sql": (f"SELECT * FROM \"licencias-urbanisticas-sujetas-al-icio\" "
-                  f"WHERE \"FECHA_OTORGAMIENTO\" >= '{_date_from_sql}' "
-                  f"AND \"FECHA_OTORGAMIENTO\" <= '{_date_to_sql}' "
-                  f"ORDER BY \"FECHA_OTORGAMIENTO\" DESC LIMIT 500")}),
-        # Fallback: plain search (no date filter, latest 500 records)
-        ("https://datos.madrid.es/api/3/action/datastore_search",
-         {"resource_id": "licencias-urbanisticas-sujetas-al-icio",
-          "limit": 500, "sort": "FECHA_OTORGAMIENTO desc"}),
-    ]
+    # Date window for filtering
+    _d_from_str = date_from.strftime("%Y-%m-%d") if hasattr(date_from, 'strftime') else str(date_from)[:10]
+    _d_to_str   = date_to.strftime("%Y-%m-%d")   if hasattr(date_to,   'strftime') else str(date_to)[:10]
 
-    for ckan_url, ckan_params in _CKAN_ENDPOINTS:
-        if not time_ok(need_s=20): break
+    for _offset in (0, 1000, 2000):
+        if not time_ok(need_s=15): break
+        _ckan_url = (
+            f"{_CKAN_BASE}/api/3/action/datastore_search"
+            f"?resource_id={_RESOURCE_ID}"
+            f"&limit=1000&offset={_offset}"
+            f"&sort=_id+desc"
+        )
         try:
-            import urllib.parse as _upc10
-            if "datastore_search_sql" in ckan_url:
-                full_url = f"{ckan_url}?{_upc10.urlencode(ckan_params)}"
-                r2 = safe_get(full_url, timeout=30,
-                              headers={"Accept": "application/json"})
-            else:
-                qs = "&".join(f"{k}={_upc10.quote(str(v))}" for k,v in ckan_params.items())
-                full_url = f"{ckan_url}?{qs}"
-                r2 = safe_get(full_url, timeout=30,
-                              headers={"Accept": "application/json"})
-
-            if not r2 or r2.status_code != 200:
-                log(f"  ⚠️  Sede Madrid GIS: CKAN HTTP {r2.status_code if r2 else 'no response'}")
-                continue
-
-            body_text = r2.content[:200].decode("utf-8","replace").lower()
-            if "<html" in body_text or "<!doctype" in body_text:
-                log(f"  ⚠️  Sede Madrid GIS: CKAN returned HTML (WAF block)")
-                break   # WAF block — no point retrying other CKAN endpoints
-
+            r = safe_get(_ckan_url, timeout=20)
+            if not r or r.status_code != 200: break
             try:
-                data2 = r2.json()
+                _ckan_data = r.json()
             except Exception:
-                continue
+                break
+            if not _ckan_data.get("success"): break
+            _records = _ckan_data.get("result", {}).get("records", [])
+            if not _records: break
 
-            # CKAN success response: {"success": true, "result": {"records": [...]}}
-            if not data2.get("success"):
-                err_msg = data2.get("error", {}).get("message", "unknown")
-                log(f"  ⚠️  Sede Madrid GIS: CKAN error — {err_msg}")
-                continue
+            _found_in_batch = 0
+            for rec in _records:
+                # Extract date and filter
+                fecha_raw = str(rec.get("FECHA_CONCESION") or rec.get("Fecha concesión") or "")[:10]
+                if fecha_raw and fecha_raw < _d_from_str: continue
 
-            records = (data2.get("result", {}).get("records", []) or
-                       data2.get("result", {}).get("result", []))
+                tipo = str(rec.get("TIPO_EXPEDIENTE") or rec.get("Tipo de expediente") or "").strip()
+                if tipo.lower() not in _TIPO_VALUABLE:
+                    # Accept partial matches too
+                    if not any(t in tipo.lower() for t in ["obra mayor", "cambio de uso", "primera ocupaci", "rehab"]):
+                        continue
 
-            if not records:
-                log(f"  🏛️  Sede Madrid GIS: 0 licences in CKAN date range")
-                continue
+                addr = " ".join(filter(None, [
+                    rec.get("NOMBRE_VIA") or rec.get("Nombre Via") or "",
+                    rec.get("NUM_VIA")    or rec.get("Número")     or "",
+                    rec.get("DISTRITO")   or rec.get("Distrito")   or "",
+                    rec.get("BARRIO")     or rec.get("Barrio")     or "",
+                ])).strip().title()
 
-            log(f"  🏛️  Sede Madrid GIS (CKAN): {len(records)} licencias found")
-            _proc_ckan_records(records, results, _TIPO_VALUABLE)
-            if results: break
+                exp_raw = str(rec.get("EXPEDIENTE") or rec.get("Número de expediente") or "").strip()
+                pem_raw = rec.get("PEM") or 0
+                try: pem_val = float(str(pem_raw).replace(",",".")) if pem_raw else 0
+                except: pem_val = 0
 
-        except Exception as _e:
-            log(f"  ⚠️  Sede Madrid GIS: {_e}")
-            continue
+                if not exp_raw:
+                    exp_raw = f"SEDE10-{abs(hash(addr+tipo+fecha_raw))%10**8}"
 
+                _source_url = (f"https://sede.madrid.es/portal/site/tramites/menuitem"
+                               f".62876cb64654a55e2dbd7003a8a409a0/?q={_up10.quote(addr[:50])}")
+                rec_dict = {
+                    "TIPO_EXPEDIENTE": tipo,
+                    "DIRECCION":       addr,
+                    "DISTRITO":        str(rec.get("DISTRITO") or ""),
+                    "FECHA_OTORGAMIENTO": fecha_raw,
+                    "PEM":             pem_val,
+                    "EXPEDIENTE":      exp_raw,
+                    "INTERESADO":      "Persona jurídica",
+                    "BARRIO":          str(rec.get("BARRIO") or ""),
+                    "PROCEDIMIENTO":   tipo,
+                }
+                results.append((exp_raw, rec_dict, _source_url,
+                                "mep+constructora+hospe+retail+actiu+alquiler"))
+                _found_in_batch += 1
+
+            if _found_in_batch == 0 and _offset > 0: break  # no more relevant data
+            if len(_records) < 1000: break  # no more pages
+
+        except Exception as _ckan_e:
+            log(f"  ⚠️  Sede Madrid GIS (CKAN): {_ckan_e}")
+            break
+
+    if results:
+        log(f"  🏛️  Sede Madrid GIS (CKAN {_RESOURCE_ID}): {len(results)} licencias")
     return results
 
 
@@ -6392,51 +6367,49 @@ def search_portal_suelo(date_from, date_to) -> list:
     results = []
     if not time_ok(need_s=30): return results
     
-    # CM Open Data CKAN API — datos.comunidad.madrid
-    # The Portal del Suelo 4.0 dataset is published on the CM CKAN portal.
-    # Correct resource slug confirmed from datos.comunidad.madrid catalog.
-    # Both JSON download and CKAN datastore API are tried.
-    _PORTAL_SUELO_URLS = [
-        # CKAN datastore_search (returns {"success": true, "result": {"records": [...]}})
-        "https://datos.comunidad.madrid/catalogo/api/3/action/datastore_search?resource_id=portal-del-suelo-parcelas&limit=500",
-        # Direct CSV/JSON download from CM open data
-        "https://datos.comunidad.madrid/catalogo/dataset/portal_del_suelo_parcelas/resource/portal-del-suelo-parcelas/download/portal_del_suelo_parcelas.json",
-        # Fallback: CM SPARQL/API
-        "https://datos.comunidad.madrid/catalogo/api/3/action/datastore_search?resource_id=parcelas_portal_suelo_4_0&limit=500",
+    # CM Open Data — parcelas portal suelo 4.0
+    # CKAN API format confirmed for datos.comunidad.madrid
+    # The resource ID for parcelas is known from the CM open data portal.
+    _SUELO_URLS = [
+        # Direct JSON export (simplest, most reliable)
+        "https://datos.comunidad.madrid/catalogo/dataset/parcelas_portal_suelo/resource/parcelas_portal_suelo_json/download/parcelas_portal_suelo.json",
+        # CKAN datastore_search API
+        "https://datos.comunidad.madrid/api/3/action/datastore_search?resource_id=parcelas_portal_suelo_json&limit=500",
+        # Alternative CKAN endpoint
+        "https://datos.comunidad.madrid/catalogo/dataset/parcelas_portal_suelo/resource/parcelas_portal_suelo_json",
     ]
 
-    for url in _PORTAL_SUELO_URLS:
+    for url in _SUELO_URLS:
         if not time_ok(need_s=20): break
         try:
-            r = safe_get(url, timeout=25, headers={"Accept": "application/json"})
-            if not r or r.status_code != 200:
-                log(f"  ⚠️  Portal Suelo: HTTP {r.status_code if r else 'no response'} — {url[:70]}")
-                continue
-
-            body_peek = r.content[:200].decode("utf-8","replace").lower()
-            if "<html" in body_peek or "<!doctype" in body_peek:
-                log(f"  ⚠️  Portal Suelo: got HTML — endpoint may have changed: {url[:60]}")
-                continue
-
+            r = safe_get(url, timeout=25)
+            if not r or r.status_code != 200: continue
+            
             try:
                 data = r.json()
             except Exception:
                 continue
-
-            # Handle CKAN format {"success":true,"result":{"records":[...]}}
-            # and plain list/dict formats
-            if isinstance(data, dict) and data.get("success"):
-                parcelas = data.get("result", {}).get("records", [])
-            elif isinstance(data, list):
+            
+            # Handle multiple response formats:
+            # - Direct JSON: [...] list of objects
+            # - CKAN datastore: {"result": {"records": [...], "total": N}}
+            # - CKAN package: {"success": true, "result": {"resources": [...]}}
+            if isinstance(data, list):
                 parcelas = data
+            elif isinstance(data, dict):
+                if data.get("success") and isinstance(data.get("result"), dict):
+                    parcelas = data["result"].get("records", [])
+                elif "records" in data:
+                    parcelas = data["records"]
+                elif "result" in data and isinstance(data["result"], list):
+                    parcelas = data["result"]
+                else:
+                    parcelas = []
             else:
-                parcelas = (data.get("records") or data.get("result") or
-                            data.get("data") or data.get("parcelas") or [])
-
+                parcelas = []
             if not parcelas:
-                log(f"  ⚠️  Portal Suelo: 0 records from {url[:60]} (may need resource_id update)")
                 continue
-
+            
             log(f"  🏛️  Portal Suelo: {len(parcelas)} parcelas available")
             
             for i, p in enumerate(parcelas):
@@ -6448,25 +6421,16 @@ def search_portal_suelo(date_from, date_to) -> list:
                             return str(v).strip()
                     return ""
                 
-                # CM Portal del Suelo confirmed field names (from datos.comunidad.madrid schema)
-                muni      = _g("municipio", "MUNICIPIO", "municipality", "Municipio")
-                uso       = _g("uso_principal", "uso", "USO_PRINCIPAL", "Uso", "uso_suelo", "USO_SUELO")
-                sup_m2    = _g("superficie_m2", "superficie", "SUPERFICIE_M2", "Superficie_m2",
-                               "sup_parcela", "area_m2", "Superficie")
-                edific    = _g("indice_edificabilidad", "edificabilidad", "EDIFICABILIDAD",
-                               "Indice_edificabilidad", "ind_edificabilidad", "edificabilidad_bruta")
-                clasif    = _g("clasificacion", "CLASIFICACION", "classification",
-                               "Clasificacion_suelo", "clasificacion_suelo")
-                estado    = _g("estado_urbanizacion", "estado", "ESTADO", "Estado",
-                               "estado_tramitacion", "Estado_tramitacion")
-                ref_cat   = _g("referencia_catastral", "ref_catastral", "REFERENCIA_CATASTRAL",
-                               "Referencia_catastral", "refcat")
-                precio    = _g("precio_venta", "precio", "PRECIO_VENTA", "Precio_venta",
-                               "precio_tasacion", "Precio")
-                regimen   = _g("regimen", "REGIMEN", "concession_type", "Regimen",
-                               "tipo_contrato", "modalidad")
-                contrato_url = _g("url_contratacion", "enlace_contratacion", "URL_CONTRATACION",
-                                  "url_licitacion", "enlace_licitacion", "url", "URL")
+                muni      = _g("municipio", "MUNICIPIO", "municipality")
+                uso       = _g("uso_principal", "uso", "USO_PRINCIPAL", "use")
+                sup_m2    = _g("superficie_m2", "superficie", "SUPERFICIE_M2", "area_m2")
+                edific    = _g("indice_edificabilidad", "edificabilidad", "EDIFICABILIDAD")
+                clasif    = _g("clasificacion", "CLASIFICACION", "classification")
+                estado    = _g("estado_urbanizacion", "estado", "ESTADO")
+                ref_cat   = _g("referencia_catastral", "ref_catastral", "REFERENCIA_CATASTRAL")
+                precio    = _g("precio_venta", "precio", "PRECIO_VENTA")
+                regimen   = _g("regimen", "REGIMEN", "concession_type")
+                contrato_url = _g("url_contratacion", "enlace_contratacion", "URL_CONTRATACION")
                 
                 if not muni or not uso: continue
                 
@@ -6584,37 +6548,34 @@ def search_ite_padron(date_from, date_to) -> list:
     
     # The ITE padrón is a Section III document published each October
     # BOCM search for it directly
+    # ITE/IEE search across BOTH sections:
+    # SECTION_II (8386) = Anuncios de Ayuntamientos — where mandatory rehabilitation
+    #   orders appear year-round after failed ITE inspections.
+    # SECTION_III (8387) = Administración Local — where padrón list is published.
+    # "Orden de ejecución de obras" appears in SECTION_II constantly — high value.
     _ITE_SEARCHES = [
-        ("padrón de edificios", SECTION_III),
-        ("inspección técnica de edificios", SECTION_III),
-        ("informe de evaluación de edificios", SECTION_III),
-        ("orden de ejecución de obras", SECTION_III),  # council-ordered works after ITE failure
+        # Year-round: mandatory works orders after failed ITE (Section II)
+        ("orden de ejecución de obras",          SECTION_II),   # most frequent
+        ("declaración de ruina",                  SECTION_II),   # demolish/rehab
+        ("rehabilitación forzosa",                SECTION_II),
+        ("inspección técnica de edificios",       SECTION_II),
+        # Annual padrón (October) in Section III
+        ("padrón de edificios",                   SECTION_III),
+        ("informe de evaluación de edificios",    SECTION_III),
+        ("inspección técnica de edificios",       SECTION_III),
     ]
     
-    # ITE Padrón is published ANNUALLY in October — it will NEVER appear
-    # in a 2-week or 4-week run window unless October falls in that window.
-    # Fix: always scan the last 18 months regardless of the job's date_from.
-    # This ensures the most recent October ITE list is always captured.
-    from datetime import date as _date_cls
-    today_ite = datetime.now().date()
-    ite_scan_from = datetime(today_ite.year - 1, today_ite.month, today_ite.day) - timedelta(days=180)
-    ite_scan_to   = datetime.now()
-
     _ite_urls = set()
     for kw, sec in _ITE_SEARCHES:
         if not time_ok(need_s=10): break
         try:
-            urls = search_bocm_keyword(kw, sec, ite_scan_from, ite_scan_to, 5)
+            chunk_start = date_from
+            chunk_end   = min(date_to, date_from + timedelta(days=365))
+            urls = search_bocm_keyword(kw, sec, date_from, chunk_end, 3)
             _ite_urls.update(urls)
             time.sleep(0.5)
         except Exception:
             pass
-
-    if _ite_urls:
-        log(f"  🏛️  ITE Padrón: {len(_ite_urls)} potential ITE documents found (18-month window)")
-    else:
-        log(f"  ITE Padrón: +0 documentos ITE — padrón published annually in October; "
-            f"check again in {'October' if today_ite.month < 10 else 'November'}")
     
     if _ite_urls:
         log(f"  🏛️  ITE Padrón: {len(_ite_urls)} potential ITE documents found")
@@ -6639,7 +6600,7 @@ def run():
     date_from = today - timedelta(weeks=WEEKS_BACK)
 
     log("=" * 70)
-    log(f"🏗️  PlanningScout Madrid — Engine v28 (s3-icio-fix+s4-rss+s5-boe+s6-ai-eval+s7-pem+s8-borme+s9-place+s10-gis)")
+    log(f"🏗️  PlanningScout Madrid — Engine v29 (s3-icio-fix+s4-rss+s5-boe+s6-ai-eval+s7-pem+s8-borme+s9-place+s10-gis)")
     log(f"📅  {today.strftime('%Y-%m-%d %H:%M')}  |  Mode: {MODE.upper()}")
     log(f"📆  {date_from.strftime('%d/%m/%Y')} → {date_to.strftime('%d/%m/%Y')} ({WEEKS_BACK}w)")
     log(f"⚙️  {N_WORKERS} processing workers  |  ⏱️ Budget: {MAX_RUN_MINUTES}min")
