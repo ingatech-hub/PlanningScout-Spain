@@ -2787,7 +2787,7 @@ def add_to_watchlist(user_email: str, row: dict) -> bool:
             if _slug_m:
                 exp = f"BOCM-{_slug_m.group(1).replace('_','-')}"
             elif bocm:
-                exp = f"BOCM-{abs(hash(bocm)) % 10**10}"
+                exp = f"BOCM-{__import__('hashlib').sha256(bocm.encode()).hexdigest()[:12]}"
         if not exp:
             return False
 
@@ -2997,14 +2997,28 @@ if "expediente" in df_f.columns:
     df_f = df_f.sort_values(
         ["_phase_priority", _sort_score_col, "pem_combined"],
         ascending=[False, False, False]
-    )
-    # For rows with a real expediente, keep only the most advanced phase
-    # (the sort above ensures the first occurrence is the most advanced)
-    _dupes_mask = _has_exp & df_f.duplicated(subset=["expediente"], keep="first")
-    df_dup_history = df_f[_dupes_mask].copy()   # save for potential "historial" display
+    ).reset_index(drop=True)  # reset index so all subsequent boolean masks align
+
+    # Re-compute _has_exp on clean 0-based index
+    _exp_col = df_f["expediente"].astype(str).str.strip()
+    _has_exp = (_exp_col != "") & (_exp_col != "nan") & (_exp_col != "None")
+
+    # For rows with a real expediente, keep only the most advanced phase row
+    _dupes_mask    = _has_exp & df_f.duplicated(subset=["expediente"], keep="first")
+    df_dup_history = df_f[_dupes_mask].copy()  # older-phase rows kept for timeline
+
+    # Build expediente → [older rows] map for inline progress timeline
+    _exp_history_map: dict = {}
+    for _, _dh_row in df_dup_history.iterrows():
+        _dh_exp = str(_dh_row.get("expediente","") or "").strip()
+        if _dh_exp:
+            _exp_history_map.setdefault(_dh_exp, []).append(_dh_row.to_dict())
+
     df_f = df_f[~_dupes_mask].reset_index(drop=True)
 else:
     df_f = df_f.sort_values(["score", "pem_combined"], ascending=[False, False]).reset_index(drop=True)
+    df_dup_history  = pd.DataFrame()
+    _exp_history_map = {}
 # ── Metrics ──
 total_pem  = df_f["pem_combined"].sum()
 count      = len(df_f)
@@ -3153,8 +3167,12 @@ with _tab_leads:
         _sheet_watched = set(load_watchlist(_u)) if _is_real_user else set()
         _watched_set   = (_sheet_watched | st.session_state["just_saved"]) - st.session_state["just_removed"]
 
-        for _, row in df_f.iterrows():
+        for _card_idx, (_, row) in enumerate(df_f.iterrows()):
             # ── Stable unique key ──────────────────────────────────────────
+            # sha256 instead of Python hash() — no hash collisions across runs.
+            # _c{idx} suffix guarantees no StreamlitDuplicateElementKey even
+            # if two rows share an expediente or produce the same sha256 prefix.
+            import hashlib as _hashlib_k
             _exp = str(row.get("expediente","") or "").strip()
             if not _exp or _exp.lower() in ("nan","none"):
                 _bocm_raw = str(row.get("bocm_url","") or "")
@@ -3162,19 +3180,67 @@ with _tab_leads:
                 if _slug_m:
                     _exp = f"BOCM-{_slug_m.group(1).replace('_','-')}"
                 elif _bocm_raw:
-                    _exp = f"BOCM-{abs(hash(_bocm_raw)) % 10**10}"
+                    _exp = f"BOCM-{_hashlib_k.sha256(_bocm_raw.encode()).hexdigest()[:12]}"
             _already = (_exp in _watched_set) if _exp else False
+            # Guaranteed-unique widget key: expediente slug + loop index
+            _safe_k  = re.sub(r'[^a-zA-Z0-9_]', '_', _exp or f"row{_card_idx}") + f"_c{_card_idx}"
 
             # ── Card HTML (pure display, no action links) ───────────────────
             _full_html = build_card(row.to_dict(), is_watched=_already, inside_details=True)
             st.markdown(build_compact_row(row.to_dict(), _full_html), unsafe_allow_html=True)
+
+            # ── Phase progress timeline (merged duplicates) ──────────────────
+            # Same project appearing again in BOCM = status update. Show older
+            # phases as a compact progress bar so users see the project journey
+            # without seeing two separate cards.
+            _hist_rows = _exp_history_map.get(_exp, []) if _exp else []
+            if _hist_rows:
+                _PHASE_LBL = {
+                    "solicitud":"Pre-lead","inicial":"Aprob. Inicial",
+                    "en_tramite":"En tramitación","definitivo":"Aprob. Definitiva",
+                    "licitacion":"Licitación","adjudicacion":"Adjudicación",
+                    "en_obra":"Obra activa","primera_ocupacion":"1ª Ocupación",
+                }
+                _tl_html = (
+                    '<div style="margin:-4px 0 10px 0;padding:7px 14px 9px;background:#fffbeb;'
+                    'border-left:3px solid #c8860a;border-radius:0 8px 8px 0;'
+                    'font-family:\'Plus Jakarta Sans\',system-ui,sans-serif;">'
+                    '<span style="font-size:9.5px;font-weight:700;color:#92400e;'
+                    'text-transform:uppercase;letter-spacing:.06em;">📈 Historial de fases</span>'
+                    '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;">'
+                )
+                for _h in sorted(_hist_rows, key=lambda r: r.get("fecha_encontrado","") or ""):
+                    _hp  = str(_h.get("fase","") or "").strip()
+                    _hd  = str(_h.get("fecha_encontrado","") or "")[:10]
+                    _hl  = _PHASE_LBL.get(_hp.lower(), _hp or "?")
+                    try:
+                        _hd = datetime.strptime(_hd, "%Y-%m-%d").strftime("%-d %b %Y")
+                    except Exception:
+                        pass
+                    _tl_html += (
+                        f'<span style="font-size:11px;color:#64748b;background:#fff;'
+                        f'border:1px solid #e2e8f0;border-radius:4px;padding:2px 7px;">'
+                        f'<span style="color:#94a3b8;font-size:10px;">{_hd}</span>'
+                        f' {_hl}</span>'
+                        f'<span style="color:#c8860a;font-size:11px;">→</span>'
+                    )
+                # Current phase (rightmost)
+                _cur_phase = str(row.get("fase","") or "").strip()
+                _cur_label = _PHASE_LBL.get(_cur_phase.lower(), _cur_phase or "?")
+                _tl_html += (
+                    f'<span style="font-size:11px;font-weight:700;color:#1e3a5f;'
+                    f'background:#dbeafe;border:1px solid #bfdbfe;'
+                    f'border-radius:4px;padding:2px 7px;">✓ {_cur_label}</span>'
+                )
+                _tl_html += '</div></div>'
+                st.markdown(_tl_html, unsafe_allow_html=True)
 
             # ── Bell icon — tiny inline follow button ────────────────────────
             # Rendered as a micro-button: just 🔔 when not following, 🔔✓ in green
             # when following. Column [15,1] keeps it at ~6% of card width — same
             # visual weight as body text. No text label needed.
             if _exp and _is_real_user:
-                _safe_k = re.sub(r'[^a-zA-Z0-9_]', '_', _exp)
+                # _safe_k already set above with unique _c{idx} suffix
                 # Bell: rightmost 1-column slot. No use_container_width → emoji-sized.
                 _pad_c, _bell_c = st.columns([16, 1])
                 with _bell_c:
@@ -3297,28 +3363,17 @@ with _tab_alertas:
             # Count how many saved projects have phase-advanced since user saved them
             _phase_order_map = {"solicitud":1,"inicial":2,"en_tramite":2,"definitivo":3,
                                 "licitacion":4,"adjudicacion":5,"en_obra":6,"primera_ocupacion":7}
-            _n_updated = 0
-            for _wr_check in _wl_valid:
-                _exp_chk = str(_wr_check.get("expediente","") or "").strip()
-                _phase_add = str(_wr_check.get("phase_at_add","") or "").strip()
-                _df_chk = _df_idx.get(_exp_chk) if "_df_idx" in dir() else None
-                if _df_chk is not None:
-                    _phase_cur_chk = str(_df_chk.get("fase","") or "").strip()
-                    if (_phase_order_map.get(_phase_cur_chk.lower(),0) >
-                            _phase_order_map.get(_phase_add.lower(),0)):
-                        _n_updated += 1
-
-            # Build lookup before we display the counter (needed for _n_updated check above)
+            # Build index: expediente → latest sheet row (must be BEFORE _n_updated loop)
             _df_idx = {}
             if "expediente" in df.columns:
                 for _, _r in df[df["expediente"].astype(str).str.strip().isin(_seen)].iterrows():
                     _k = str(_r.get("expediente","")).strip()
                     if _k: _df_idx[_k] = _r
 
-            # Count using _df_idx now that it's populated
+            # Count projects whose phase advanced since user saved the alert
             _n_updated = 0
             for _wr_check in _wl_valid:
-                _exp_chk = str(_wr_check.get("expediente","") or "").strip()
+                _exp_chk       = str(_wr_check.get("expediente","") or "").strip()
                 _phase_add_chk = str(_wr_check.get("phase_at_add","") or "").strip()
                 _dr = _df_idx.get(_exp_chk)
                 if _dr is not None:
@@ -3340,10 +3395,11 @@ with _tab_alertas:
                 f'{_upd_suffix}</p>',
                 unsafe_allow_html=True)
 
-            for _wr in _wl_valid:
+            for _al_idx, _wr in enumerate(_wl_valid):
                 _exp_s  = str(_wr.get("expediente","") or "").strip()
                 if not _exp_s: continue
-                _safe_k = re.sub(r'[^a-zA-Z0-9_]', '_', _exp_s)
+                # al_ prefix + _a{idx} suffix ensures no collision with main list sv_ keys
+                _safe_k = re.sub(r'[^a-zA-Z0-9_]', '_', _exp_s) + f"_a{_al_idx}"
                 _pv     = _gprio(_wr)
                 _, _pl, _pfc = _PRIO.get(_pv, _PRIO["0"])
 
