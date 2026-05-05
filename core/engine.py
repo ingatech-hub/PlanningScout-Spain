@@ -1701,7 +1701,7 @@ def _ai_extract_project_size(text, permit_type="", description=""):
         t_len = len(text)
         sample = text[:2500] + ("\n...\n" + text[-1500:] if t_len > 4000 else "")
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[{"role": "user", "content":
                 f"Proyecto: {permit_type}. Descripción: {description[:300]}\n\nTexto:\n{sample[:4000]}\n\n"
                 "Extrae en UNA línea compacta los datos físicos del proyecto: m² construidos, "
