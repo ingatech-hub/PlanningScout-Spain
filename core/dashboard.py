@@ -1564,7 +1564,6 @@ def build_card(row, is_watched=False, inside_details=False):
             _PHASE_LABELS_SHORT = {
                 "inicial":"Inicial","definitivo":"Definitivo",
                 "licitacion":"Licitación","adjudicacion":"Adjudicación",
-                "en_obra":"En Obra","primera_ocupacion":"1ª Ocup.",
                 "en_tramite":"En Trámite","solicitud":"Pre-lead",
             }
             _prev_label = _PHASE_LABELS_SHORT.get(_prev_ph.lower(), _prev_ph)
@@ -1802,11 +1801,7 @@ def build_card(row, is_watched=False, inside_details=False):
         "definitivo":        ("🟢", "Aprobación definitiva",  "#f0fdf4", "#16a34a", "#bbf7d0"),
         "inicial":           ("🟡", "Aprobación inicial",     "#fffbeb", "#b45309", "#fde68a"),
         "licitacion":        ("🔵", "Licitación activa",      "#eff4fb", "#1e3a5f", "#bfdbfe"),
-        "primera_ocupacion": ("⚪", "1ª Ocupación",           "#f8fafc", "#64748b", "#e2e8f0"),
         "en_tramite":        ("🟠", "En trámite",             "#fff7ed", "#c2410c", "#fed7aa"),
-        "solicitud":         ("⚡", "Pre-lead · En solicitud","#fffbeb", "#b45309", "#fde68a"),
-        "adjudicacion":      ("🏆", "Adjudicación",           "#f0f9ff", "#0369a1", "#bae6fd"),
-        "en_obra":           ("🏗️", "En obra",               "#eff4fb", "#1e3a5f", "#bfdbfe"),
     }
     if fase_val and fase_val in _FASE_LABELS:
         fi, ft, fb, fc, fbd = _FASE_LABELS[fase_val]
@@ -2622,12 +2617,8 @@ with st.sidebar:
     _FASE_OPTIONS = {
         "definitivo":        "🟢 Aprobación definitiva",
         "licitacion":        "🔵 Licitación activa",
-        "adjudicacion":      "🏆 Adjudicación",
-        "en_obra":           "🏗️ En obra",
-        "primera_ocupacion": "🏠 1ª Ocupación",
         "inicial":           "🟡 Aprobación inicial",
         "en_tramite":        "🟠 En trámite",
-        "solicitud":         "⚡ Pre-lead (solicitud)",
     }
     fase_sel = st.multiselect(
         "Fase del proyecto",
