@@ -344,69 +344,64 @@ if not st.session_state["authenticated"]:
     st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-.stApp { background: #f0f2f5 !important; }
+.stApp { background: #f4f5f7 !important; }
 [data-testid="stSidebar"]      { display: none !important; }
 header[data-testid="stHeader"] { display: none !important; }
 
-/* THE CARD — entire block-container is the white card */
 .block-container {
     background: #fff !important;
-    border-radius: 20px !important;
-    border: 1px solid #e2e8f0 !important;
-    box-shadow: 0 4px 32px rgba(0,0,0,.09), 0 1px 4px rgba(0,0,0,.05) !important;
+    border-radius: 12px !important;
+    border: 1px solid #e8eaed !important;
+    box-shadow: 0 2px 20px rgba(0,0,0,.07), 0 1px 4px rgba(0,0,0,.04) !important;
     padding: 40px 36px 36px !important;
-    max-width: 420px !important;
-    margin: 7vh auto 0 !important;
+    max-width: 400px !important;
+    margin: 8vh auto 0 !important;
 }
 
-/* Strip Streamlit's own form border so form blends into the card */
 [data-testid="stForm"] {
     background: transparent !important;
     border: none !important;
     padding: 0 !important;
 }
 
-/* Inputs — slightly tinted so they read on the white card */
 .stTextInput > div > div > input {
     background: #f8fafc !important;
-    border: 1.5px solid #e2e8f0 !important;
-    border-radius: 8px !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 6px !important;
     color: #0d1a2b !important;
     font-size: 14px !important;
-    padding: 11px 14px !important;
+    padding: 10px 12px !important;
 }
 .stTextInput > div > div > input:focus {
     background: #fff !important;
     border-color: #1e3a5f !important;
-    box-shadow: 0 0 0 3px rgba(30,58,95,.1) !important;
+    box-shadow: 0 0 0 3px rgba(30,58,95,.08) !important;
     outline: none !important;
 }
 .stTextInput label p,
 .stTextInput [data-testid="stWidgetLabel"] p {
-    color: #334155 !important;
-    font-size: 13px !important;
+    color: #374151 !important;
+    font-size: 12.5px !important;
     font-weight: 600 !important;
     font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
 }
 
-/* Submit button */
 [data-testid="stFormSubmitButton"] > button {
     background: #1e3a5f !important;
     color: #fff !important;
     border: none !important;
-    border-radius: 10px !important;
-    font-size: 15px !important;
+    border-radius: 6px !important;
+    font-size: 14px !important;
     font-weight: 600 !important;
     width: 100% !important;
-    padding: 13px 0 !important;
+    padding: 12px 0 !important;
     margin-top: 4px !important;
-    transition: background .15s;
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
 }
 [data-testid="stFormSubmitButton"] > button:hover {
-    background: #162d4a !important;
+    background: #16304f !important;
 }
 
-/* Hide Streamlit's "Press Enter to submit form" tooltip */
 [data-testid="InputInstructions"] { display: none !important; }
 </style>""", unsafe_allow_html=True)
 
@@ -510,8 +505,6 @@ st.markdown("""
 #MainMenu { visibility: hidden; }
 footer { visibility: hidden !important; }
 
-/* Hide ALL Streamlit attribution — "Made with Streamlit", "Created by ingatech-hub", etc.
-   Streamlit Cloud shows the deploying GitHub org in several elements; hide them all. */
 [data-testid="stToolbar"]         { display: none !important; }
 #stDecoration                      { display: none !important; }
 .viewerBadge_container__1QSob,
@@ -520,9 +513,10 @@ footer { visibility: hidden !important; }
 [data-testid="stStatusWidget"]     { display: none !important; }
 [data-testid="manage-app-button"]  { display: none !important; }
 
-.stApp { background: #f0f2f5 !important; }
+/* Base background */
+.stApp { background: #f4f5f7 !important; }
 
-/* Main content padding — breathing room both sides */
+/* Main content */
 .block-container {
     padding-top: 28px !important;
     padding-bottom: 48px !important;
@@ -531,56 +525,60 @@ footer { visibility: hidden !important; }
     max-width: 1100px !important;
 }
 
-/* Sidebar */
+/* Sidebar — clean white, minimal */
 [data-testid="stSidebar"] {
     background: #ffffff !important;
-    border-right: 1px solid #e2e8f0 !important;
+    border-right: 1px solid #e8eaed !important;
 }
 [data-testid="stSidebarContent"] {
-    padding: 20px 20px 32px 20px !important;
+    padding: 20px 18px 32px 18px !important;
 }
 
-/* Sidebar text contrast — all labels dark */
+/* Sidebar labels */
 [data-testid="stSidebar"] label,
 [data-testid="stSidebar"] p,
 [data-testid="stSidebar"] span,
 [data-testid="stSidebar"] .stRadio > div label span {
-    color: #334155 !important;
+    color: #374151 !important;
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
 }
 [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
-    font-size: 13px !important;
+    font-size: 11px !important;
     font-weight: 600 !important;
-    color: #334155 !important;
+    color: #6b7280 !important;
+    text-transform: uppercase !important;
+    letter-spacing: .06em !important;
 }
 
-/* ── Download/Export button: white bg + navy text, always visible ── */
+/* Download button */
 .stDownloadButton button,
 [data-testid="stDownloadButton"] button,
 .stDownloadButton > div > button {
-    background: #ffffff !important;
-    color: #1e3a5f !important;
-    border: 1.5px solid #1e3a5f !important;
-    border-radius: 8px !important;
-    font-size: 13px !important;
+    background: #1e3a5f !important;
+    color: #ffffff !important;
+    border: 1px solid #1e3a5f !important;
+    border-radius: 6px !important;
+    font-size: 12px !important;
     font-weight: 600 !important;
     padding: 8px 16px !important;
-    min-height: 40px !important;
+    min-height: 36px !important;
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
 }
 .stDownloadButton button:hover,
 [data-testid="stDownloadButton"] button:hover {
-    border-color: #1e3a5f !important;
-    background: #eff4fb !important;
-    color: #1e3a5f !important;
+    background: #16304f !important;
+    border-color: #16304f !important;
 }
 
-/* ── All buttons: readable bg + text at all times ── */
+/* All regular buttons */
 .stButton button {
     background: #ffffff !important;
-    color: #334155 !important;
-    border: 1.5px solid #e2e8f0 !important;
-    border-radius: 8px !important;
-    font-size: 13px !important;
+    color: #374151 !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 6px !important;
+    font-size: 12.5px !important;
     font-weight: 500 !important;
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
 }
 .stButton button:hover {
     border-color: #1e3a5f !important;
@@ -588,28 +586,41 @@ footer { visibility: hidden !important; }
     background: #f8fafc !important;
 }
 
-/* ── Bell micro-button (sv_ key, emoji only) ──
-   Target: the LAST column in a [16,1] layout.
-   Remove border + bg so it looks like a floating icon.            */
-.stButton button[data-testid="baseButton-secondary"]:not([disabled]) {
-    background: #ffffff !important;
-    color: #334155 !important;
-    border: 1.5px solid #e2e8f0 !important;
+/* Follow/unfollow icon button */
+[data-testid="baseButton-secondary"] {
+    font-size: 13px !important;
+    padding: 2px 8px !important;
+    height: 26px !important;
+    min-width: 40px !important;
+    line-height: 1 !important;
+    border-radius: 6px !important;
+    border: 1px solid #e2e8f0 !important;
+    background: #f8fafc !important;
+    color: #64748b !important;
+    box-shadow: none !important;
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
+    font-weight: 500 !important;
+}
+[data-testid="baseButton-secondary"]:hover {
+    background: #eff4fb !important;
+    border-color: #1e3a5f !important;
+    color: #1e3a5f !important;
 }
 
-/* Priority popover button: small icon-only pill */
+/* Priority popover button */
 [data-testid="stPopover"] > button {
     background: #f8fafc !important;
     color: #475569 !important;
     border: 1px solid #e2e8f0 !important;
-    border-radius: 8px !important;
-    font-size: 16px !important;
-    padding: 4px 8px !important;
-    min-height: 30px !important;
-    height: 30px !important;
+    border-radius: 6px !important;
+    font-size: 12px !important;
+    padding: 3px 8px !important;
+    min-height: 28px !important;
+    height: 28px !important;
     line-height: 1 !important;
-    font-weight: 400 !important;
+    font-weight: 500 !important;
     box-shadow: none !important;
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
 }
 [data-testid="stPopover"] > button:hover {
     background: #eff4fb !important;
@@ -617,228 +628,20 @@ footer { visibility: hidden !important; }
     color: #1e3a5f !important;
 }
 
-/* Mobile */
-@media (max-width: 768px) {
-
-    /* ── Layout: top padding for sidebar toggle button ── */
-    .block-container {
-        padding-left: 10px !important;
-        padding-right: 10px !important;
-        padding-top: 56px !important;
-        padding-bottom: 80px !important;
-        max-width: 100% !important;
-    }
-
-    /* ── SIDEBAR TOGGLE: make it big, visible, always accessible ──
-       This is Streamlit's built-in hamburger control for mobile.
-       We style it as a "☰ Filtros" navy button in the top-left.    */
-    [data-testid="stSidebarCollapsedControl"] {
-        position: fixed !important;
-        top: 8px !important;
-        left: 8px !important;
-        z-index: 9999 !important;
-        background: #1e3a5f !important;
-        border-radius: 8px !important;
-        padding: 8px 14px !important;
-        box-shadow: 0 2px 8px rgba(30,58,95,0.3) !important;
-        display: flex !important;
-        align-items: center !important;
-        gap: 6px !important;
-        min-height: 40px !important;
-    }
-    [data-testid="stSidebarCollapsedControl"] > span {
-        display: none !important;
-    }
-    [data-testid="stSidebarCollapsedControl"] svg {
-        fill: #ffffff !important;
-        color: #ffffff !important;
-        stroke: #ffffff !important;
-        width: 18px !important;
-        height: 18px !important;
-    }
-    [data-testid="stSidebarCollapsedControl"]::after {
-        content: "Filtros" !important;
-        color: #ffffff !important;
-        font-size: 13px !important;
-        font-weight: 600 !important;
-        font-family: "Plus Jakarta Sans", system-ui, sans-serif !important;
-    }
-
-    /* ── Sidebar: overlay full height on mobile ── */
-    section[data-testid="stSidebar"] {
-        position: fixed !important;
-        z-index: 9998 !important;
-        top: 0 !important;
-        left: 0 !important;
-        height: 100vh !important;
-        max-width: 85vw !important;
-        min-width: 260px !important;
-        box-shadow: 4px 0 20px rgba(0,0,0,0.2) !important;
-    }
-
-    /* ── Profile title: never truncate ── */
-    h1 {
-        font-size: 19px !important;
-        word-break: break-word !important;
-        overflow-wrap: anywhere !important;
-    }
-
-    /* ── Tabs ── */
-    [data-testid="stTabs"] button {
-        font-size: 11px !important;
-        padding: 6px 8px !important;
-        white-space: nowrap !important;
-    }
-
-    /* ── Download button: always visible ── */
-    .stDownloadButton button,
-    [data-testid="stDownloadButton"] button {
-        background: #ffffff !important;
-        color: #1e3a5f !important;
-        border: 1.5px solid #1e3a5f !important;
-        font-size: 12px !important;
-        font-weight: 600 !important;
-    }
-
-    /* ── Cards ── */
-    details > summary { padding: 10px 12px !important; }
-
-    /* ── All buttons: readable ── */
-    .stButton button {
-        font-size: 12px !important;
-        color: #334155 !important;
-        background: #ffffff !important;
-    }
-
-    /* ── Selectbox ── */
-    .stSelectbox > div { font-size: 13px !important; }
-
-    /* ── Inputs ── */
-    .stNumberInput input { font-size: 15px !important; }
-    textarea { font-size: 14px !important; }
-    [data-testid="stSlider"] { padding: 0 4px !important; }
-
-    /* ── Expander ── */
-    .streamlit-expanderHeader { font-size: 13px !important; }
+/* Tabs — clean underline style */
+[data-testid="stTabs"] button {
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    color: #6b7280 !important;
+    padding: 8px 14px !important;
 }
-
-@media (max-width: 400px) {
-    .block-container { padding-left: 6px !important; padding-right: 6px !important; }
-    [data-testid="stSidebarCollapsedControl"] { padding: 6px 10px !important; }
-}
-
-/* Hide Streamlit "Press Enter to apply" hint */
-[data-testid="InputInstructions"] { display: none !important; }
-
-/* Seguir / Siguiendo st.button — sits just below the card, small and clean */
-/* Only targets the specific narrow column (1 of 8 split) used in the render loop */
-.seguir-col button {
-    font-size: 12px !important;
-    font-weight: 600 !important;
-    padding: 5px 14px !important;
-}
-
-/* ── DARK MODE ───────────────────────────────────────────────────────────────
-   Fires only when the user's OS/browser is set to dark mode.
-   Targets the Streamlit chrome (toolbar, sidebar, app shell) — not the cards,
-   which use inline styles and intentionally stay light (white cards on dark
-   background is standard dark-mode UI, same as Notion / Linear / Vercel).
-────────────────────────────────────────────────────────────────────────────── */
-/* ── Force light mode always (professional B2B SaaS standard) ──────────────
-   Android phones auto-switch to dark. We override to keep the brand look.
-   Cards use inline styles so they're always light regardless.            */
-@media (prefers-color-scheme: dark) {
-    html, body, .stApp {
-        background-color: #f0f2f5 !important;
-        color: #1e3a5f !important;
-    }
-    .stApp { background: #f0f2f5 !important; color: #1e3a5f !important; }
-
-    /* Sidebar — keep light */
-    [data-testid="stSidebar"] {
-        background: #ffffff !important;
-        border-right: 1px solid #e2e8f0 !important;
-    }
-    [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] p,
-    [data-testid="stSidebar"] span,
-    [data-testid="stSidebar"] .stRadio > div label span,
-    [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
-        color: #1e3a5f !important;
-    }
-
-    /* Inputs, selects — light background */
-    .stSelectbox > div > div,
-    .stNumberInput > div > div > input,
-    .stTextInput > div > div > input,
-    .stTextArea > div > div > textarea {
-        background: #ffffff !important;
-        color: #1e3a5f !important;
-        border-color: #e2e8f0 !important;
-    }
-
-    /* Buttons — light */
-    .stButton button[kind="secondary"] {
-        background: #ffffff !important;
-        color: #1e3a5f !important;
-        border-color: #e2e8f0 !important;
-    }
-    .stButton button[kind="secondary"]:hover {
-        border-color: #1e3a5f !important;
-    }
-
-    /* Text everywhere readable */
-    p, span, label, div, h1, h2, h3, h4 {
-        color: #1e3a5f !important;
-    }
-    .stMarkdown p { color: #475569 !important; }
-
-    /* Download button */
-    .stDownloadButton button {
-        background: #1e3a5f !important;
-        color: #ffffff !important;
-        border-color: #1e3a5f !important;
-    }
-
-    /* Tabs */
-    [data-testid="stTabs"] button { color: #475569 !important; }
-    [data-testid="stTabs"] button[aria-selected="true"] { color: #1e3a5f !important; }
-
-    /* Slider */
-    [data-testid="stSlider"] .stSlider { color: #1e3a5f !important; }
-
-    /* Main content background */
-    section[data-testid="stMainBlockContainer"],
-    .main .block-container { background: #f0f2f5 !important; }
-}
-
-/* Bell follow button — emoji only, zero visual weight */
-[data-testid="baseButton-secondary"] {
-    font-size: 15px !important;
-    padding: 2px 4px !important;
-    height: 26px !important;
-    min-width: 28px !important;
-    line-height: 1 !important;
-    border-radius: 50% !important;
-    border: 1px solid transparent !important;
-    background: transparent !important;
-    color: #94a3b8 !important;
-    box-shadow: none !important;
-}
-[data-testid="baseButton-secondary"]:hover {
-    background: #f1f5f9 !important;
-    border-color: #e2e8f0 !important;
+[data-testid="stTabs"] button[aria-selected="true"] {
     color: #1e3a5f !important;
-}
-/* When following (🔔✓) — subtle green tint */
-button:has(> div > p:contains("✓")) {
-    color: #16a34a !important;
+    font-weight: 600 !important;
 }
 
-
-/* ── Selectbox: disable typing COMPLETELY ── */
-/* Streamlit 1.30+ made all selectboxes searchable (users can type).
-   We override this for sort/filter selects — they should be pure dropdowns. */
+/* Selectbox: disable typing */
 div[data-baseweb="select"] input[type="text"] {
     caret-color: transparent !important;
     pointer-events: none !important;
@@ -849,18 +652,14 @@ div[data-baseweb="select"] input[type="text"] {
 div[data-baseweb="select"] [data-testid="stSelectboxVirtualDropdown"] {
     cursor: default !important;
 }
-/* For the sort selectbox specifically — styled as a pill button */
 .sort-select div[data-baseweb="select"] > div {
-    border-radius: 100px !important;
-    border: 1.5px solid #e2e8f0 !important;
+    border-radius: 6px !important;
+    border: 1px solid #e2e8f0 !important;
     background: #ffffff !important;
     font-size: 12px !important;
-    min-height: 32px !important;
+    min-height: 30px !important;
     cursor: pointer !important;
 }
-
-/* ── Selectbox: disable typing/editing (Streamlit 1.32+ made them searchable) ── */
-/* Users must use the dropdown — typing in the box causes confusion */
 div[data-baseweb="select"] input {
     caret-color: transparent !important;
     pointer-events: none !important;
@@ -869,11 +668,145 @@ div[data-baseweb="select"]:not([data-focused]) input {
     user-select: none !important;
     -webkit-user-select: none !important;
 }
-/* Also applies to all stSelectbox elements */
 [data-testid="stSelectbox"] input[type="text"],
 [data-testid="stSelectbox"] input[class*="Input"] {
     caret-color: transparent !important;
     pointer-events: none !important;
+}
+
+/* Hide "Press Enter to apply" hint */
+[data-testid="InputInstructions"] { display: none !important; }
+
+/* Follow button column */
+.seguir-col button {
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    padding: 4px 12px !important;
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+    .block-container {
+        padding-left: 10px !important;
+        padding-right: 10px !important;
+        padding-top: 56px !important;
+        padding-bottom: 80px !important;
+        max-width: 100% !important;
+    }
+    [data-testid="stSidebarCollapsedControl"] {
+        position: fixed !important;
+        top: 8px !important;
+        left: 8px !important;
+        z-index: 9999 !important;
+        background: #1e3a5f !important;
+        border-radius: 6px !important;
+        padding: 8px 14px !important;
+        box-shadow: 0 2px 8px rgba(30,58,95,0.25) !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+        min-height: 38px !important;
+    }
+    [data-testid="stSidebarCollapsedControl"] > span { display: none !important; }
+    [data-testid="stSidebarCollapsedControl"] svg {
+        fill: #ffffff !important;
+        color: #ffffff !important;
+        stroke: #ffffff !important;
+        width: 17px !important;
+        height: 17px !important;
+    }
+    [data-testid="stSidebarCollapsedControl"]::after {
+        content: "Filtros" !important;
+        color: #ffffff !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+        font-family: "Plus Jakarta Sans", system-ui, sans-serif !important;
+    }
+    section[data-testid="stSidebar"] {
+        position: fixed !important;
+        z-index: 9998 !important;
+        top: 0 !important;
+        left: 0 !important;
+        height: 100vh !important;
+        max-width: 85vw !important;
+        min-width: 260px !important;
+        box-shadow: 4px 0 20px rgba(0,0,0,0.15) !important;
+    }
+    h1 {
+        font-size: 19px !important;
+        word-break: break-word !important;
+        overflow-wrap: anywhere !important;
+    }
+    [data-testid="stTabs"] button {
+        font-size: 11px !important;
+        padding: 6px 8px !important;
+        white-space: nowrap !important;
+    }
+    .stDownloadButton button,
+    [data-testid="stDownloadButton"] button {
+        font-size: 12px !important;
+        font-weight: 600 !important;
+    }
+    details > summary { padding: 10px 12px !important; }
+    .stButton button { font-size: 12px !important; }
+    .stSelectbox > div { font-size: 13px !important; }
+    .stNumberInput input { font-size: 15px !important; }
+    textarea { font-size: 14px !important; }
+    [data-testid="stSlider"] { padding: 0 4px !important; }
+    .streamlit-expanderHeader { font-size: 13px !important; }
+}
+@media (max-width: 400px) {
+    .block-container { padding-left: 6px !important; padding-right: 6px !important; }
+    [data-testid="stSidebarCollapsedControl"] { padding: 6px 10px !important; }
+}
+
+/* Force light mode */
+@media (prefers-color-scheme: dark) {
+    html, body, .stApp {
+        background-color: #f4f5f7 !important;
+        color: #1e3a5f !important;
+    }
+    .stApp { background: #f4f5f7 !important; color: #1e3a5f !important; }
+    [data-testid="stSidebar"] {
+        background: #ffffff !important;
+        border-right: 1px solid #e8eaed !important;
+    }
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] .stRadio > div label span,
+    [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
+        color: #1e3a5f !important;
+    }
+    .stSelectbox > div > div,
+    .stNumberInput > div > div > input,
+    .stTextInput > div > div > input,
+    .stTextArea > div > div > textarea {
+        background: #ffffff !important;
+        color: #1e3a5f !important;
+        border-color: #e2e8f0 !important;
+    }
+    .stButton button[kind="secondary"] {
+        background: #ffffff !important;
+        color: #1e3a5f !important;
+        border-color: #e2e8f0 !important;
+    }
+    .stButton button[kind="secondary"]:hover {
+        border-color: #1e3a5f !important;
+    }
+    p, span, label, div, h1, h2, h3, h4 {
+        color: #1e3a5f !important;
+    }
+    .stMarkdown p { color: #475569 !important; }
+    .stDownloadButton button {
+        background: #1e3a5f !important;
+        color: #ffffff !important;
+        border-color: #1e3a5f !important;
+    }
+    [data-testid="stTabs"] button { color: #475569 !important; }
+    [data-testid="stTabs"] button[aria-selected="true"] { color: #1e3a5f !important; }
+    section[data-testid="stMainBlockContainer"],
+    .main .block-container { background: #f4f5f7 !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -888,42 +821,42 @@ _FH = "font-family:'Fraunces',Georgia,serif"
 _FM = "font-family:'JetBrains Mono',monospace"
 
 # Card wrapper
-SC = "background:#fff;border:1.5px solid #e2e8f0;border-radius:14px;overflow:hidden;margin-bottom:14px;box-shadow:0 2px 8px rgba(0,0,0,.05);"
+SC = "background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,.04);"
 # Header
-SH  = "background:#f7f8fa;border-bottom:1px solid #e2e8f0;padding:13px 20px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;"
+SH  = "background:#fafbfc;border-bottom:1px solid #f1f5f9;padding:11px 18px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;"
 SLO = "display:flex;align-items:flex-start;gap:8px;min-width:0;flex:1;"
-SDO = "width:8px;height:8px;border-radius:50%;background:#16a34a;flex-shrink:0;margin-top:4px;"
-SMU = f"{_FH};font-size:14px;font-weight:700;color:#0d1a2b;line-height:1.3;"
+SDO = "width:3px;height:16px;border-radius:2px;background:#1e3a5f;flex-shrink:0;margin-top:3px;"
+SMU = f"{_FH};font-size:13px;font-weight:700;color:#0d1a2b;line-height:1.3;"
 SBD = "display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;"
-# Score pills
-SSPG = f"{_FM};font-size:12px;font-weight:500;padding:4px 11px;border-radius:100px;white-space:nowrap;color:#fff;background:#15803d;"
-SSPO = f"{_FM};font-size:12px;font-weight:500;padding:4px 11px;border-radius:100px;white-space:nowrap;color:#fff;background:#b45309;"
-SSPN = f"{_FM};font-size:12px;font-weight:500;padding:4px 11px;border-radius:100px;white-space:nowrap;color:#fff;background:#1e3a5f;"
-SSPD = f"{_FM};font-size:12px;font-weight:500;padding:4px 11px;border-radius:100px;white-space:nowrap;color:#fff;background:#94a3b8;"
-# Status badges (outlined)
-SSBG = f"{_FM};font-size:10px;font-weight:500;padding:4px 10px;border-radius:100px;white-space:nowrap;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;"
-SSBA = f"{_FM};font-size:10px;font-weight:500;padding:4px 10px;border-radius:100px;white-space:nowrap;background:#fffbeb;color:#b45309;border:1px solid #fde68a;"
-SSBN = f"{_FM};font-size:10px;font-weight:500;padding:4px 10px;border-radius:100px;white-space:nowrap;background:#eff4fb;color:#1e3a5f;border:1px solid #bfdbfe;"
+# Score pills — refined, no emoji
+SSPG = f"{_FM};font-size:11px;font-weight:600;padding:3px 10px;border-radius:6px;white-space:nowrap;color:#fff;background:#15803d;"
+SSPO = f"{_FM};font-size:11px;font-weight:600;padding:3px 10px;border-radius:6px;white-space:nowrap;color:#fff;background:#b45309;"
+SSPN = f"{_FM};font-size:11px;font-weight:600;padding:3px 10px;border-radius:6px;white-space:nowrap;color:#fff;background:#1e3a5f;"
+SSPD = f"{_FM};font-size:11px;font-weight:600;padding:3px 10px;border-radius:6px;white-space:nowrap;color:#94a3b8;background:#f1f5f9;"
+# Status badges — subtle outlined
+SSBG = f"{_FM};font-size:10px;font-weight:500;padding:3px 9px;border-radius:5px;white-space:nowrap;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;"
+SSBA = f"{_FM};font-size:10px;font-weight:500;padding:3px 9px;border-radius:5px;white-space:nowrap;background:#fffbeb;color:#b45309;border:1px solid #fde68a;"
+SSBN = f"{_FM};font-size:10px;font-weight:500;padding:3px 9px;border-radius:5px;white-space:nowrap;background:#f0f4ff;color:#3b4fa8;border:1px solid #c7d2fe;"
 # Body
-SBO  = "padding:16px 20px;"
-SRF  = f"{_FM};font-size:10.5px;color:#94a3b8;margin-bottom:5px;letter-spacing:.03em;"
-STI  = f"{_FH};font-size:17px;font-weight:600;color:#0d1a2b;margin-bottom:5px;line-height:1.3;"
-SAD  = f"{_F};font-size:13px;color:#64748b;display:flex;align-items:flex-start;gap:5px;margin-bottom:14px;line-height:1.4;"
+SBO  = "padding:14px 18px;"
+SRF  = f"{_FM};font-size:10px;color:#94a3b8;margin-bottom:4px;letter-spacing:.03em;"
+STI  = f"{_FH};font-size:16px;font-weight:600;color:#0d1a2b;margin-bottom:4px;line-height:1.3;"
+SAD  = f"{_F};font-size:12.5px;color:#64748b;display:flex;align-items:flex-start;gap:5px;margin-bottom:12px;line-height:1.4;"
 # Table
-STA  = "border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:12px;"
-SRB  = f"{_F};display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-bottom:1px solid #f1f5f9;gap:12px;"
-SRL  = f"{_F};display:flex;justify-content:space-between;align-items:center;padding:9px 14px;gap:12px;"
-SKE  = f"{_FM};font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;flex-shrink:0;min-width:75px;"
+STA  = "border:1px solid #f1f5f9;border-radius:8px;overflow:hidden;margin-bottom:10px;"
+SRB  = f"{_F};display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #f8fafc;gap:12px;"
+SRL  = f"{_F};display:flex;justify-content:space-between;align-items:center;padding:8px 12px;gap:12px;"
+SKE  = f"{_FM};font-size:9.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;flex-shrink:0;min-width:75px;"
 SVA  = f"{_F};font-size:13px;color:#334155;text-align:right;line-height:1.4;"
-SVP  = f"{_FH};font-size:17px;font-weight:700;color:#1e3a5f;"
+SVP  = f"{_FH};font-size:16px;font-weight:700;color:#1e3a5f;"
 STG  = "display:flex;gap:5px;justify-content:flex-end;flex-wrap:wrap;"
-STA2 = f"{_FM};font-size:10.5px;background:#fffbeb;color:#b45309;border:1px solid #fde68a;padding:3px 8px;border-radius:5px;"
-STN  = f"{_FM};font-size:10.5px;background:#eff4fb;color:#1e3a5f;border:1px solid #bfdbfe;padding:3px 8px;border-radius:5px;"
-STG2 = f"{_FM};font-size:10.5px;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;padding:3px 8px;border-radius:5px;"
+STA2 = f"{_FM};font-size:10px;background:#fffbeb;color:#b45309;border:1px solid #fde68a;padding:2px 7px;border-radius:4px;"
+STN  = f"{_FM};font-size:10px;background:#f0f4ff;color:#3b4fa8;border:1px solid #c7d2fe;padding:2px 7px;border-radius:4px;"
+STG2 = f"{_FM};font-size:10px;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;padding:2px 7px;border-radius:4px;"
 # Footer
-SFO  = "background:#f7f8fa;border-top:1px solid #e2e8f0;padding:10px 20px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;"
-SBP  = f"{_F};display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:#fff;background:#1e3a5f;border:1px solid #1e3a5f;padding:5px 12px;border-radius:7px;text-decoration:none;white-space:nowrap;"
-SBT  = f"{_F};display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:#334155;background:#fff;border:1px solid #cbd5e1;padding:5px 12px;border-radius:7px;text-decoration:none;white-space:nowrap;"
+SFO  = "background:#fafbfc;border-top:1px solid #f1f5f9;padding:9px 18px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;"
+SBP  = f"{_F};display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:#fff;background:#1e3a5f;border:1px solid #1e3a5f;padding:5px 12px;border-radius:6px;text-decoration:none;white-space:nowrap;"
+SBT  = f"{_F};display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:500;color:#475569;background:#fff;border:1px solid #e2e8f0;padding:5px 12px;border-radius:6px;text-decoration:none;white-space:nowrap;"
 SNO  = f"{_FM};font-size:10px;color:#94a3b8;margin-left:auto;"
 
 # ════════════════════════════════════════════════════════════
@@ -1301,9 +1234,8 @@ def fmt(v):
     return f"€{int(v):,}"
 
 def sc_pill(sc):
-    e = "🟢" if sc >= 65 else "🟠" if sc >= 40 else "🟡" if sc >= 20 else "⚪"
     s = SSPG if sc >= 65 else SSPO if sc >= 40 else SSPN if sc >= 20 else SSPD
-    return f'<span style="{s}">{e} {sc} / 100</span>'
+    return f'<span style="{s}">{sc} / 100</span>'
 
 
 def _card_action_url(action: str, email: str, exp: str, sess_tok: str, pv: str = "") -> str:
@@ -1328,19 +1260,19 @@ def _card_action_url(action: str, email: str, exp: str, sess_tok: str, pv: str =
 # ── Compact score circle for list rows ───────────────────────
 _SC_COL = {True: "#15803d", False: "#b45309"}   # high / mid
 def _score_circle(sc: int) -> str:
-    """Small filled circle with score — matches website mini-card look."""
+    """Small filled square with score — matches refined design."""
     if sc >= 65:   bg, txt = "#15803d", "#fff"
     elif sc >= 40: bg, txt = "#b45309", "#fff"
     elif sc >= 20: bg, txt = "#1e3a5f", "#fff"
-    else:          bg, txt = "#e2e8f0", "#94a3b8"
+    else:          bg, txt = "#f1f5f9", "#94a3b8"
     return (
-        f'<div style="min-width:46px;width:46px;height:46px;border-radius:50%;'
+        f'<div style="min-width:42px;width:42px;height:42px;border-radius:8px;'
         f'background:{bg};display:flex;flex-direction:column;align-items:center;'
         f'justify-content:center;flex-shrink:0;">'
         f'<span style="font-family:\'JetBrains Mono\',monospace;font-size:13px;'
         f'font-weight:700;color:{txt};line-height:1;">{sc}</span>'
-        f'<span style="font-family:\'JetBrains Mono\',monospace;font-size:8px;'
-        f'font-weight:400;color:{txt};opacity:.75;line-height:1;">pts</span>'
+        f'<span style="font-family:\'JetBrains Mono\',monospace;font-size:7px;'
+        f'font-weight:400;color:{txt};opacity:.7;line-height:1;text-transform:uppercase;letter-spacing:.04em;">pts</span>'
         f'</div>'
     )
 
@@ -1418,17 +1350,17 @@ def build_compact_row(row: dict, full_card_html: str) -> str:
 
     # Summary row — styled to match website mini-card
     _sum_style = (
-        "list-style:none;display:flex;align-items:center;gap:12px;padding:12px 16px;"
+        "list-style:none;display:flex;align-items:center;gap:10px;padding:10px 14px;"
         "cursor:pointer;background:#fff;user-select:none;-webkit-user-select:none;"
         "outline:none;"
     )
     _ref_s = (
-        f"font-family:'JetBrains Mono',monospace;font-size:10px;color:#94a3b8;"
+        f"font-family:'JetBrains Mono',monospace;font-size:9.5px;color:#94a3b8;"
         f"letter-spacing:.03em;margin-bottom:3px;"
     )
     _title_s = (
-        f"font-family:'Fraunces',Georgia,serif;font-size:14px;font-weight:600;"
-        f"color:#0d1a2b;line-height:1.35;margin-bottom:5px;"
+        f"font-family:'Fraunces',Georgia,serif;font-size:13.5px;font-weight:600;"
+        f"color:#0d1a2b;line-height:1.35;margin-bottom:4px;"
     )
 
     summary_html = (
@@ -1446,8 +1378,8 @@ def build_compact_row(row: dict, full_card_html: str) -> str:
 
     # Wrapper: card border, subtle hover, open state highlights border
     return (
-        f'<details style="background:#fff;border:1.5px solid #e2e8f0;border-radius:12px;'
-        f'margin-bottom:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.04);">'
+        f'<details style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;'
+        f'margin-bottom:6px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.03);">'
         f'{summary_html}'
         f'<div style="border-top:1px solid #f1f5f9;">'
         f'{full_card_html}'
@@ -1542,7 +1474,7 @@ def build_card(row, is_watched=False, inside_details=False):
                 _days_badge = (
                     f"<span style='font-family:\"JetBrains Mono\",monospace;font-size:9px;"
                     f"font-weight:600;background:#fef3c7;color:#b45309;border-radius:4px;"
-                    f"padding:2px 7px;margin-right:4px;'>⏱ {_days_old}d</span>"
+                    f"padding:2px 7px;margin-right:4px;'>{_days_old}d</span>"
                 )
             elif _days_old <= 14:
                 _days_badge = (
@@ -1574,7 +1506,7 @@ def build_card(row, is_watched=False, inside_details=False):
                 f"padding:2px 7px;margin-right:4px;border:1px solid #bfdbfe;"
                 f"cursor:default;' "
                 f"title='Fase anterior: {_prev_label} · Actualizado: {_last_upd[:10]}'>"
-                f"🔄 Actualizado {_days_text}</span>"
+                f"Actualizado {_days_text}</span>"
             )
         except Exception:
             pass
@@ -1613,9 +1545,9 @@ def build_card(row, is_watched=False, inside_details=False):
             f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:10.5px;'
             f'color:#64748b;margin-bottom:10px;padding:5px 8px;background:#f8fafc;'
             f'border-radius:6px;border-left:2px solid #e2e8f0;">'
-            f'📐 {_proj_size}</div>'
+            f'{_proj_size}</div>'
         )
-    addr_html  = f'<div style="{SAD}"><span>📍</span><span>{addr}</span></div>' if addr and addr != title else ""
+    addr_html  = f'<div style="{SAD}"><span style="color:#94a3b8;font-size:11px;">↳</span><span>{addr}</span></div>' if addr and addr != title else ""
 
     # ── Description: short inline preview + expandable dropdown for full text ──
     # Shows first ~140 chars inline. If longer, wraps in <details> dropdown
@@ -1643,7 +1575,7 @@ def build_card(row, is_watched=False, inside_details=False):
             desc_preview_html = (
                 f'<div style="{_SDESC}">{desc_short}</div>'
                 "<details><summary style='" + _SUM_DESC + "'>"
-                "<span style='font-size:12px'>ℹ️</span>"
+                "<span style='font-size:12px;color:#94a3b8;'>▸</span>"
                 "<span style='color:#64748b;font-weight:500;'>Descripción completa</span>"
                 "<span style='margin-left:auto;font-size:10px;color:#94a3b8;'>▼</span>"
                 f"</summary><div style='{_DIV_DESC}'>"
@@ -1724,12 +1656,12 @@ def build_card(row, is_watched=False, inside_details=False):
         _ver_label = "↗ Ver en el BOE" if _is_boe else "↗ Ver en el BOCM"
         links.append(f'<a href="{bocm}" target="_blank" rel="noopener" style="{SBP}">{_ver_label}</a>')
     if maps:
-        links.append(f'<a href="{maps}" target="_blank" rel="noopener" style="{SBT}">📍 Mapa</a>')
+        links.append(f'<a href="{maps}" target="_blank" rel="noopener" style="{SBT}">Mapa</a>')
     if pdf:
-        links.append(f'<a href="{pdf}" target="_blank" rel="noopener" style="{SBT}">📑 PDF</a>')
+        links.append(f'<a href="{pdf}" target="_blank" rel="noopener" style="{SBT}">PDF</a>')
     if prom:
         q = html_lib.unescape(prom).replace(" ", "+")
-        links.append(f'<a href="https://www.linkedin.com/search/results/all/?keywords={html_lib.escape(q)}" target="_blank" rel="noopener" style="{SBT}">🔍 Promotor</a>')
+        links.append(f'<a href="https://www.linkedin.com/search/results/all/?keywords={html_lib.escape(q)}" target="_blank" rel="noopener" style="{SBT}">Promotor</a>')
 
     # ── Key Contacts + Action Window — removed from card display (noise).
     # These fields were generating NameError when extras_html was used before definition.
@@ -1759,7 +1691,7 @@ def build_card(row, is_watched=False, inside_details=False):
         f'<a href="{_mailto}" style="{_F};display:inline-flex;align-items:center;gap:3px;'
         f'font-size:11px;font-weight:500;color:#94a3b8;background:#f8fafc;border:1px solid #e2e8f0;'
         f'padding:4px 9px;border-radius:7px;text-decoration:none;white-space:nowrap;" '
-        f'title="Reportar error o pedir más info">✉️ Reportar</a>'
+        f'title="Reportar error o pedir más info">Reportar</a>'
     )
 
     footer = (
@@ -1786,7 +1718,7 @@ def build_card(row, is_watched=False, inside_details=False):
         ai_e = _html_esc.escape(ai_val[:600])
         extras_html += (
             "<details><summary style='" + _SUM + "'>"
-            "<span style='font-size:12px'>📋</span>"
+            "<span style='font-size:12px;color:#94a3b8;'>▸</span>"
             "<span style='color:#64748b;font-weight:500;'>Análisis del proyecto</span>"
             "<span style='margin-left:auto;font-size:10px;color:#94a3b8;'>▼</span>"
             "</summary><div style='" + _DIV + "'>"
@@ -1798,19 +1730,19 @@ def build_card(row, is_watched=False, inside_details=False):
     # Phase (col Q) — shown as a tag row
     fase_val = str(row.get("fase", "") or "").strip()
     _FASE_LABELS = {
-        "definitivo":        ("🟢", "Aprobación definitiva",  "#f0fdf4", "#16a34a", "#bbf7d0"),
-        "inicial":           ("🟡", "Aprobación inicial",     "#fffbeb", "#b45309", "#fde68a"),
-        "licitacion":        ("🔵", "Licitación activa",      "#eff4fb", "#1e3a5f", "#bfdbfe"),
-        "en_tramite":        ("🟠", "En trámite",             "#fff7ed", "#c2410c", "#fed7aa"),
+        "definitivo":        ("Aprobación definitiva",  "#f0fdf4", "#16a34a", "#bbf7d0"),
+        "inicial":           ("Aprobación inicial",     "#fffbeb", "#b45309", "#fde68a"),
+        "licitacion":        ("Licitación activa",      "#eff4fb", "#1e3a5f", "#bfdbfe"),
+        "en_tramite":        ("En trámite",             "#fff7ed", "#c2410c", "#fed7aa"),
     }
     if fase_val and fase_val in _FASE_LABELS:
-        fi, ft, fb, fc, fbd = _FASE_LABELS[fase_val]
+        ft, fb, fc, fbd = _FASE_LABELS[fase_val]
         extras_html += (
             f"<div style='padding:10px 20px 14px 20px;display:flex;align-items:center;gap:8px;'>"
             f"<span style='font-size:10px;font-weight:700;text-transform:uppercase;"
             f"letter-spacing:.07em;color:#94a3b8;'>Fase:</span>"
             f"<span style='font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;"
-            f"background:{fb};color:{fc};border:1px solid {fbd};'>{fi} {ft}</span>"
+            f"background:{fb};color:{fc};border:1px solid {fbd};'>{ft}</span>"
             f"</div>"
         )
 
@@ -1820,7 +1752,7 @@ def build_card(row, is_watched=False, inside_details=False):
         sup_e = _html_esc.escape(sup_val[:500])
         extras_html += (
             "<details><summary style='" + _SUM + "'>"
-            "<span style='font-size:12px'>🛒</span>"
+            "<span style='font-size:12px;color:#94a3b8;'>▸</span>"
             "<span style='color:#64748b;font-weight:500;'>Materiales y suministros estimados</span>"
             "<span style='margin-left:auto;font-size:10px;color:#94a3b8;'>▼</span>"
             "</summary><div style='" + _DIV + "'>"
@@ -1828,7 +1760,7 @@ def build_card(row, is_watched=False, inside_details=False):
             "border-radius:10px;padding:14px 16px;'>" + sup_e + "</div>"
             "<div style='margin-top:8px;font-size:10.5px;color:#94a3b8;font-style:italic;"
             "font-family:\"JetBrains Mono\",monospace;padding:0 2px;'>"
-            "⚠️ Estimación generada por IA. Puede no ser 100% precisa. "
+            "Estimación generada por IA. Puede no ser 100% precisa. "
             "Verificar siempre con el proyecto técnico original."
             "</div>"
             "</div></details>"
@@ -1867,7 +1799,7 @@ def build_card(row, is_watched=False, inside_details=False):
     ]
     _infra_html = "".join(_sip_row(k, v) for k, v in _infra_rows)
     if _infra_html:
-        _sector_rows.append(("🏗️ Licitación / Infraestructura", _infra_html))
+        _sector_rows.append(("Licitación / Infraestructura", _infra_html))
 
     # 🏢 Gran Constructora fields
     _const_rows = [
@@ -1881,7 +1813,7 @@ def build_card(row, is_watched=False, inside_details=False):
     ]
     _const_html = "".join(_sip_row(k, v) for k, v in _const_rows)
     if _const_html:
-        _sector_rows.append(("🏢 Datos de construcción", _const_html))
+        _sector_rows.append(("Datos de construcción", _const_html))
 
     # 🏪 Expansión Retail fields
     _retail_rows = [
@@ -1897,7 +1829,7 @@ def build_card(row, is_watched=False, inside_details=False):
     ]
     _retail_html = "".join(_sip_row(k, v) for k, v in _retail_rows)
     if _retail_html:
-        _sector_rows.append(("🏪 Análisis Expansión Retail", _retail_html))
+        _sector_rows.append(("Análisis Expansión Retail", _retail_html))
 
     # 📐 Promotores / RE fields
     _re_rows = [
@@ -1912,7 +1844,7 @@ def build_card(row, is_watched=False, inside_details=False):
     ]
     _re_html = "".join(_sip_row(k, v) for k, v in _re_rows)
     if _re_html:
-        _sector_rows.append(("📐 Datos RE / Promotores", _re_html))
+        _sector_rows.append(("Datos RE / Promotores", _re_html))
 
     # 🔧 MEP Instaladores fields
     _mep_rows = [
@@ -1925,7 +1857,7 @@ def build_card(row, is_watched=False, inside_details=False):
     ]
     _mep_html = "".join(_sip_row(k, v) for k, v in _mep_rows)
     if _mep_html:
-        _sector_rows.append(("🔧 Instalaciones MEP", _mep_html))
+        _sector_rows.append(("Instalaciones MEP", _mep_html))
 
     # 🏭 Industrial / Logística fields
     _ind_rows = [
@@ -1940,7 +1872,7 @@ def build_card(row, is_watched=False, inside_details=False):
     ]
     _ind_html = "".join(_sip_row(k, v) for k, v in _ind_rows)
     if _ind_html:
-        _sector_rows.append(("🏭 Industrial / Logística", _ind_html))
+        _sector_rows.append(("Industrial / Logística", _ind_html))
 
     # 🚧 Alquiler Maquinaria fields — include urgency pill
     _alq_urgencia = str(row.get("alq_urgencia","") or "").strip()
@@ -1969,7 +1901,7 @@ def build_card(row, is_watched=False, inside_details=False):
     ]
     _alq_html = "".join(_sip_row(k, v) for k, v in _alq_rows)
     if _alq_urgencia or _alq_html:
-        _sector_rows.append(("🚧 Alquiler Maquinaria", _alq_urg_pill + _alq_html))
+        _sector_rows.append(("Alquiler Maquinaria", _alq_urg_pill + _alq_html))
 
     # 🛒 Compras / Materiales fields
     _mat_rows = [
@@ -1983,7 +1915,7 @@ def build_card(row, is_watched=False, inside_details=False):
     ]
     _mat_html = "".join(_sip_row(k, v) for k, v in _mat_rows)
     if _mat_html:
-        _sector_rows.append(("🛒 Cantidades de materiales", _mat_html))
+        _sector_rows.append(("Cantidades de materiales", _mat_html))
 
     # 💼 Contract & Oficinas fields
     _cont_rows = [
@@ -1998,7 +1930,7 @@ def build_card(row, is_watched=False, inside_details=False):
     ]
     _cont_html = "".join(_sip_row(k, v) for k, v in _cont_rows)
     if _cont_html:
-        _sector_rows.append(("💼 Contract & Oficinas", _cont_html))
+        _sector_rows.append(("Contract & Oficinas", _cont_html))
 
     # 🏠 Flexliving & Hostelería fields — include coliving potential pill
     _flex_potencial = str(row.get("flex_potencial_coliving","") or "").strip()
@@ -2024,14 +1956,14 @@ def build_card(row, is_watched=False, inside_details=False):
     ]
     _flex_html = "".join(_sip_row(k, v) for k, v in _flex_rows)
     if _flex_potencial or _flex_html:
-        _sector_rows.append(("🏠 Flexliving & Hostelería", _flex_pill + _flex_html))
+        _sector_rows.append(("Flexliving & Hostelería", _flex_pill + _flex_html))
 
     # Render all non-empty sector panels as collapsible dropdowns
     for _sec_title, _sec_content in _sector_rows:
         if not _sec_content.strip(): continue
         extras_html += (
             "<details><summary style='" + _SUM + "'>"
-            f"<span style='font-size:12px'>🔬</span>"
+            f"<span style='font-size:12px;color:#94a3b8;'>▸</span>"
             f"<span style='color:#64748b;font-weight:500;'>{_sec_title}</span>"
             "<span style='margin-left:auto;font-size:10px;color:#94a3b8;'>▼</span>"
             "</summary><div style='padding:8px 20px 14px 20px;'>"
@@ -2362,18 +2294,18 @@ def build_map(df_map, profile_key="general"):
         # Precision indicator (only show when approximate)
         prec_note = ""
         if prec == "municipality":
-            prec_note = f"<div style='font-size:10px;color:#94a3b8;margin-top:4px;'>📍 Ubicación aproximada ({muni})</div>"
+            prec_note = f"<div style='font-size:10px;color:#94a3b8;margin-top:4px;'>Ubicación aproximada ({muni})</div>"
         elif prec == "geocoded":
-            prec_note = f"<div style='font-size:10px;color:#94a3b8;margin-top:4px;'>📍 Zona estimada</div>"
+            prec_note = f"<div style='font-size:10px;color:#94a3b8;margin-top:4px;'>Zona estimada</div>"
 
         # Pre-lead badge
         prelead_badge = ""
         if fase == "solicitud":
-            prelead_badge = "<span style='background:#fef3c7;color:#b45309;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-right:4px;'>⚡ PRE-LEAD</span>"
+            prelead_badge = "<span style='background:#fef3c7;color:#b45309;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-right:4px;'>PRE-LEAD</span>"
 
         # Links
         link_bocm  = f'<a href="{bocm}" target="_blank" style="color:#1e3a5f;font-weight:600;font-size:12px;text-decoration:none;">↗ Ver BOCM</a>' if bocm else ""
-        link_maps  = f'<a href="{maps_u}" target="_blank" style="color:#1e3a5f;font-weight:600;font-size:12px;text-decoration:none;margin-left:10px;">🗺️ Maps</a>' if maps_u else ""
+        link_maps  = f'<a href="{maps_u}" target="_blank" style="color:#1e3a5f;font-weight:600;font-size:12px;text-decoration:none;margin-left:10px;">Ver mapa</a>' if maps_u else ""
 
         popup_html = f"""
 <div style="font-family:'Plus Jakarta Sans',system-ui,sans-serif;min-width:260px;max-width:320px;">
@@ -2394,7 +2326,7 @@ def build_map(df_map, profile_key="general"):
   {'<details style="border-top:1px solid #f1f5f9;"><summary style="padding:8px 12px;font-size:11px;font-weight:600;color:#334155;cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;"><span>🤖</span><span>Análisis IA</span><span style="margin-left:auto;font-size:9px;color:#94a3b8;">▼</span></summary><div style="padding:4px 12px 10px;font-size:11px;color:#374151;line-height:1.5;background:#f8fafc;margin:0 8px 8px;border-radius:6px;">' + r.get("ai_evaluation","")[:350] + ('…' if len(r.get("ai_evaluation","")) > 350 else '') + '</div></details>' if r.get("ai_evaluation","") and str(r.get("ai_evaluation","")).lower() not in ("nan","none","") else ''}
   <div style="padding:10px 12px;border-top:1px solid #f1f5f9;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     {link_bocm}{link_maps}
-    <span style="font-size:10px;color:#94a3b8;margin-left:auto;">↩ Vuelve a 📋 Lista para la ficha completa</span>
+    <span style="font-size:10px;color:#94a3b8;margin-left:auto;">Ver ficha completa en Lista</span>
   </div>
   <div style="padding:4px 12px 10px;font-size:10px;color:#94a3b8;">{fecha}</div>
 </div>"""
@@ -2459,11 +2391,10 @@ with st.spinner("Cargando proyectos…"):
 if df_raw.empty:
     st.markdown(f"""
     <div style="min-height:60vh;display:flex;align-items:center;justify-content:center;">
-    <div style="text-align:center;padding:48px 32px;background:#fff;border-radius:14px;
-         border:1.5px solid #e2e8f0;box-shadow:0 2px 8px rgba(0,0,0,.05);">
+    <div style="text-align:center;padding:48px 32px;background:#fff;border-radius:12px;
+         border:1px solid #e2e8f0;box-shadow:0 2px 8px rgba(0,0,0,.05);">
       {LOGO_HTML}
-      <div style="font-size:40px;margin:20px 0 14px;">📡</div>
-      <h3 style="font-family:'Fraunces',Georgia,serif;font-size:20px;color:#0d1a2b;margin:0 0 8px;">Sin datos todavía</h3>
+      <h3 style="font-family:'Fraunces',Georgia,serif;font-size:20px;color:#0d1a2b;margin:24px 0 8px;">Sin datos todavía</h3>
       <p style="font-size:14px;color:#64748b;line-height:1.6;margin:0;">
         El scraper no ha procesado proyectos aún.<br>
         Ejecuta <strong>--weeks 8</strong> en GitHub Actions para el backfill inicial.
@@ -2581,11 +2512,12 @@ with st.sidebar:
     )
 
     if is_locked:
+        _display_name = " ".join(profile_names[default_idx].split()[1:]) or profile_names[default_idx]
         st.markdown(f"""
-        <div style="background:#eff4fb;border:1.5px solid rgba(30,58,95,.2);border-radius:10px;
+        <div style="background:#eff4fb;border:1.5px solid rgba(30,58,95,.2);border-radius:8px;
              padding:10px 14px;font-size:13px;font-weight:600;color:#1e3a5f;margin-bottom:14px;
              font-family:'Plus Jakarta Sans',system-ui,sans-serif;">
-          {profile_names[default_idx]}
+          {_display_name}
         </div>""", unsafe_allow_html=True)
         selected_profile = profile_names[default_idx]
     else:
@@ -2594,6 +2526,7 @@ with st.sidebar:
             profile_names,
             index=default_idx,
             label_visibility="collapsed",
+            format_func=lambda n: " ".join(n.split()[1:]) or n,
         )
 
     prof = PROFILES[selected_profile]
@@ -2615,10 +2548,10 @@ with st.sidebar:
 
     # ── Phase filter ──
     _FASE_OPTIONS = {
-        "definitivo":        "🟢 Aprobación definitiva",
-        "licitacion":        "🔵 Licitación activa",
-        "inicial":           "🟡 Aprobación inicial",
-        "en_tramite":        "🟠 En trámite",
+        "definitivo":        "Aprobación definitiva",
+        "licitacion":        "Licitación activa",
+        "inicial":           "Aprobación inicial",
+        "en_tramite":        "En trámite",
     }
     fase_sel = st.multiselect(
         "Fase del proyecto",
@@ -2628,7 +2561,7 @@ with st.sidebar:
     )
 
     muni_sel  = st.multiselect("Municipio", options=all_munis, placeholder="Todos")
-    st.caption(f"📍 {len(all_munis)} municipios disponibles")
+    st.caption(f"{len(all_munis)} municipios disponibles")
     aw_sel = []  # Urgencia removed — field data not reliable enough yet
 
     # ── Keyword search ──
@@ -2646,12 +2579,12 @@ with st.sidebar:
 
     st.markdown('<div style="height:1px;background:#e2e8f0;margin:14px 0 16px;"></div>', unsafe_allow_html=True)
 
-    if st.button("🔄 Actualizar datos"):
+    if st.button("Actualizar datos"):
         st.cache_data.clear()
         st.rerun()
 
     if not is_locked:
-        with st.expander("🔗 Compartir con cliente"):
+        with st.expander("Compartir con cliente"):
             pk = prof["key"]
             st.code(f"planningscout.streamlit.app?perfil={pk}", language=None)
             st.caption("El cliente abre este enlace en su navegador — sin cuenta, sin login.")
@@ -2869,11 +2802,9 @@ name_part  = " ".join(selected_profile.split()[1:])
 
 st.markdown(f"""
 <div style="margin-bottom:24px;padding-bottom:18px;border-bottom:1px solid #e2e8f0;">
-  <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
-    <span style="font-size:24px;">{emoji_part}</span>
-    <h1 style="font-family:'Fraunces',Georgia,serif;font-size:26px;font-weight:700;
-         color:#0d1a2b;margin:0;line-height:1.2;word-break:break-word;overflow-wrap:anywhere;font-size:clamp(18px,5vw,26px);">{name_part}</h1>
-  </div>
+  <h1 style="font-family:'Fraunces',Georgia,serif;font-weight:700;
+       color:#0d1a2b;margin:0 0 6px;line-height:1.2;word-break:break-word;
+       overflow-wrap:anywhere;font-size:clamp(20px,4vw,28px);">{name_part}</h1>
   <p style="font-size:13px;color:#64748b;margin:0;font-family:'Plus Jakarta Sans',system-ui,sans-serif;">
     {"Todo el historial disponible" if days_back >= 365 else f"Ventana de {days_back // 7} semanas" if days_back >= 14 else f"Ventana de {days_back} días"} &nbsp;·&nbsp; Proyectos detectados del BOCM (Comunidad de Madrid)
   </p>
@@ -3031,7 +2962,7 @@ for col, (val, lbl, clr) in zip(
     [c1, c2],
     [
         (str(count),      "Proyectos detectados", "#1c3458"),
-        (str(high_leads), "🟢 Prioritarios",      "#16a34a"),
+        (str(high_leads), "Prioritarios",         "#16a34a"),
     ]
 ):
     with col:
@@ -3045,10 +2976,11 @@ for col, (val, lbl, clr) in zip(
         </div>""", unsafe_allow_html=True)
 
 # ── Tip ──
+_tip_clean = re.sub(r'(?:💡|🔴|🟡|🟢|🔵|🟠|⚪)\s*', '', prof["tip"])
 st.markdown(
-    f'<div style="background:#fffbeb;border-left:3px solid #c8860a;border-radius:0 8px 8px 0;'
-    f'padding:12px 16px;font-size:13px;color:#64748b;line-height:1.6;margin:18px 0;'
-    f'font-family:\'Plus Jakarta Sans\',system-ui,sans-serif;">{prof["tip"]}</div>',
+    f'<div style="background:#f8fafc;border-left:3px solid #1e3a5f;border-radius:0 6px 6px 0;'
+    f'padding:11px 16px;font-size:12.5px;color:#475569;line-height:1.65;margin:18px 0;'
+    f'font-family:\'Plus Jakarta Sans\',system-ui,sans-serif;">{_tip_clean}</div>',
     unsafe_allow_html=True
 )
 
@@ -3059,7 +2991,7 @@ if not df_f.empty:
     col_dl, _ = st.columns([1, 3])
     with col_dl:
         st.download_button(
-            f"⬇️ Exportar {count} leads CSV",
+            f"Exportar {count} leads — CSV",
             data=csv,
             file_name=f"planningscout_{prof['key']}_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv",
@@ -3071,9 +3003,9 @@ st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 # TABS — Lista de leads  |  Mapa interactivo
 # ════════════════════════════════════════════════════════════
 _tab_leads, _tab_mapa, _tab_alertas = st.tabs([
-    "📋  Lista de proyectos",
-    "🗺️  Mapa interactivo",
-    "🔖  Mis alertas",
+    "Lista de proyectos",
+    "Mapa interactivo",
+    "Mis alertas",
 ])
 
 # ── TAB 1: LEADS LIST ────────────────────────────────────────
@@ -3081,11 +3013,14 @@ with _tab_leads:
     if df_f.empty:
         st.markdown(f"""
         <div style="text-align:center;padding:56px 24px;background:#fff;
-             border:1.5px solid #e2e8f0;border-radius:14px;
+             border:1px solid #e2e8f0;border-radius:12px;
              font-family:'Plus Jakarta Sans',system-ui,sans-serif;">
-          <div style="font-size:40px;">🔍</div>
+          <div style="width:40px;height:40px;border-radius:50%;background:#f1f5f9;
+               display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">
+            <span style="color:#94a3b8;font-size:18px;">↺</span>
+          </div>
           <h3 style="font-family:'Fraunces',Georgia,serif;font-size:19px;
-              color:#0d1a2b;margin:14px 0 8px;">Sin proyectos con estos filtros</h3>
+              color:#0d1a2b;margin:0 0 8px;">Sin proyectos con estos filtros</h3>
           <p style="font-size:13px;color:#64748b;line-height:1.6;margin:0;">
             Reduce el PEM mínimo ({fmt(min_pem)}),<br>
             baja la puntuación mínima,<br>
@@ -3193,11 +3128,11 @@ with _tab_leads:
                     "en_obra":"Obra activa","primera_ocupacion":"1ª Ocupación",
                 }
                 _tl_html = (
-                    '<div style="margin:-4px 0 10px 0;padding:7px 14px 9px;background:#fffbeb;'
-                    'border-left:3px solid #c8860a;border-radius:0 8px 8px 0;'
+                    '<div style="margin:-4px 0 10px 0;padding:7px 14px 9px;background:#f8fafc;'
+                    'border-left:3px solid #cbd5e1;border-radius:0 6px 6px 0;'
                     'font-family:\'Plus Jakarta Sans\',system-ui,sans-serif;">'
-                    '<span style="font-size:9.5px;font-weight:700;color:#92400e;'
-                    'text-transform:uppercase;letter-spacing:.06em;">📈 Historial de fases</span>'
+                    '<span style="font-size:9.5px;font-weight:700;color:#64748b;'
+                    'text-transform:uppercase;letter-spacing:.06em;">Historial de fases</span>'
                     '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;">'
                 )
                 for _h in sorted(_hist_rows, key=lambda r: r.get("fecha_encontrado","") or ""):
@@ -3231,12 +3166,10 @@ with _tab_leads:
             # when following. Column [15,1] keeps it at ~6% of card width — same
             # visual weight as body text. No text label needed.
             if _exp and _is_real_user:
-                # _safe_k already set above with unique _c{idx} suffix
-                # Bell: rightmost 1-column slot. No use_container_width → emoji-sized.
                 _pad_c, _bell_c = st.columns([16, 1])
                 with _bell_c:
                     if _already:
-                        if st.button("🔔✓", key=f"sv_{_safe_k}",
+                        if st.button("✓", key=f"sv_{_safe_k}",
                                      help="Siguiendo · clic para dejar de seguir"):
                             remove_from_watchlist(_u, _exp)
                             st.session_state.setdefault("just_removed", set()).add(_exp)
@@ -3244,7 +3177,7 @@ with _tab_leads:
                             load_watchlist.clear()
                             st.rerun()
                     else:
-                        if st.button("🔔", key=f"sv_{_safe_k}",
+                        if st.button("+", key=f"sv_{_safe_k}",
                                      help="Guardar en Mis alertas"):
                             add_to_watchlist(_u, row.to_dict())
                             st.session_state.setdefault("just_saved", set()).add(_exp)
@@ -3269,7 +3202,7 @@ with _tab_mapa:
   <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#c8860a;margin-right:4px;vertical-align:middle;"></span>Media (40–64 pts)</span>
   <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#64748b;margin-right:4px;vertical-align:middle;"></span>Baja (&lt;40 pts)</span>
   <span>⚡ = Pre-lead (solicitud)</span>
-  <span style="color:#94a3b8;font-size:11px;">📍 Ubicación aprox. para proyectos sin dirección exacta</span>
+  <span style="color:#94a3b8;font-size:11px;">Ubicación aproximada para proyectos sin dirección exacta</span>
 </div>""", unsafe_allow_html=True)
 
         # Map size control — Expansion directors want a large overview
@@ -3279,7 +3212,7 @@ with _tab_mapa:
         _map_rows = min(len(df_f), 50)
         df_map = df_f.head(_map_rows)
         if len(df_f) > _map_rows:
-            st.caption(f"ℹ️ Mapa muestra los {_map_rows} proyectos con mayor puntuación. Usa filtros para ver zonas concretas.")
+            st.caption(f"Mapa muestra los {_map_rows} proyectos con mayor puntuación. Usa filtros para ver zonas concretas.")
         result = build_map(df_map, profile_key=prof["key"])
         if result:
             folium_map, n_plotted = result
@@ -3294,8 +3227,8 @@ with _tab_mapa:
             if n_plotted < count:
                 _prec_note = f" · primeros {n_plotted} mostrados"
             st.caption(
-                f"📍 {n_plotted} proyectos mapeados{_prec_note} · "
-                f"Haz clic en un pin para ver los detalles · "
+                f"{n_plotted} proyectos mapeados{_prec_note} · "
+                f"Clic en un pin para ver detalles · "
                 f"Zoom con rueda del ratón o pellizco · "
                 f"Los pines con ≈ indican ubicación a nivel de municipio"
             )
@@ -3307,8 +3240,11 @@ with _tab_alertas:
     _ua = st.session_state.get("user_email","")
     if not _ua or _ua.startswith("token:"):
         st.markdown("""
-<div style="text-align:center;padding:64px 24px;background:#fff;border:1.5px solid #e2e8f0;border-radius:14px;margin-top:8px;">
-  <div style="font-size:40px;margin-bottom:12px;">🔒</div>
+<div style="text-align:center;padding:64px 24px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;margin-top:8px;">
+  <div style="width:48px;height:48px;border-radius:50%;background:#f1f5f9;display:flex;
+       align-items:center;justify-content:center;margin:0 auto 16px;">
+    <span style="font-size:20px;color:#94a3b8;">⟳</span>
+  </div>
   <p style="font-size:14px;color:#64748b;margin:0;">Inicia sesión con tu email para gestionar tus alertas.</p>
 </div>""", unsafe_allow_html=True)
     else:
@@ -3327,10 +3263,10 @@ with _tab_alertas:
                 _seen.add(_je)
 
         _PRIO = {
-            "1": ("🔴", "Prioridad 1", "#dc2626"),
-            "2": ("🟠", "Prioridad 2", "#c2410c"),
-            "3": ("🟡", "Prioridad 3", "#a16207"),
-            "0": ("",   "Sin prioridad","#94a3b8"),
+            "1": ("", "Prioridad 1", "#dc2626"),
+            "2": ("", "Prioridad 2", "#c2410c"),
+            "3": ("", "Prioridad 3", "#a16207"),
+            "0": ("",  "Sin prioridad","#94a3b8"),
         }
         def _gprio(r): return str(r.get("priority","0") or "0").strip() or "0"
         _wl_full.sort(key=lambda r: int(_gprio(r)) if _gprio(r) != "0" else 999)
@@ -3343,11 +3279,14 @@ with _tab_alertas:
 
         if not _wl_valid:
             st.markdown("""
-<div style="text-align:center;padding:64px 24px;background:#fff;border:1.5px solid #e2e8f0;border-radius:14px;margin-top:8px;">
-  <div style="font-size:40px;margin-bottom:12px;">🔔</div>
+<div style="text-align:center;padding:64px 24px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;margin-top:8px;">
+  <div style="width:48px;height:48px;border-radius:50%;background:#f1f5f9;display:flex;
+       align-items:center;justify-content:center;margin:0 auto 16px;">
+    <span style="font-size:20px;color:#94a3b8;">○</span>
+  </div>
   <h3 style="font-family:'Fraunces',Georgia,serif;font-size:18px;color:#0d1a2b;margin:0 0 8px;">Sin alertas guardadas</h3>
   <p style="font-size:13px;color:#64748b;line-height:1.6;margin:0;">
-    Pulsa <strong>🔔 Seguir</strong> en cualquier proyecto para recibir alertas cuando avance de fase.
+    Pulsa <strong>Seguir</strong> en cualquier proyecto para recibir alertas cuando avance de fase.
   </p>
 </div>""", unsafe_allow_html=True)
         else:
@@ -3376,7 +3315,7 @@ with _tab_alertas:
             _upd_suffix = (
                 f' &nbsp;<span style="background:#eff6ff;color:#2563eb;'
                 f'font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;'
-                f'border:1px solid #bfdbfe;">🔄 {_n_updated} actualizados</span>'
+                f'border:1px solid #bfdbfe;">{_n_updated} actualizados</span>'
             ) if _n_updated > 0 else ""
 
             st.markdown(
@@ -3443,24 +3382,23 @@ with _tab_alertas:
                             _ts_display = _last_updated[:16]
                     # Urgency color by new phase
                     _urgency_colors = {
-                        "adjudicacion":      ("#fef2f2","#dc2626","#fecaca","🔴"),
-                        "en_obra":           ("#fef2f2","#dc2626","#fecaca","🔴"),
-                        "licitacion":        ("#fffbeb","#b45309","#fde68a","🟡"),
-                        "definitivo":        ("#eff6ff","#1d4ed8","#bfdbfe","🔵"),
-                        "primera_ocupacion": ("#f0fdf4","#15803d","#bbf7d0","🟢"),
+                        "adjudicacion":      ("#fef2f2","#dc2626","#fecaca","Adjudicación"),
+                        "en_obra":           ("#fef2f2","#dc2626","#fecaca","Obra activa"),
+                        "licitacion":        ("#fffbeb","#b45309","#fde68a","Licitación"),
+                        "definitivo":        ("#eff6ff","#1d4ed8","#bfdbfe","Definitivo"),
+                        "primera_ocupacion": ("#f0fdf4","#15803d","#bbf7d0","1ª Ocupación"),
                     }
-                    _bg, _tc, _bd, _emoji = _urgency_colors.get(
-                        _phase_now.lower(), ("#eff6ff","#1d4ed8","#bfdbfe","🔵"))
+                    _bg, _tc, _bd, _phase_label_u = _urgency_colors.get(
+                        _phase_now.lower(), ("#eff6ff","#1d4ed8","#bfdbfe","Actualizado"))
                     st.markdown(
-                        f'<div style="background:{_bg};border:1.5px solid {_bd};border-radius:8px;'
-                        f'padding:10px 16px;margin-bottom:6px;">'
-                        f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
-                        f'<span style="font-size:15px;">{_emoji}</span>'
-                        f'<span style="font-size:12px;font-weight:700;color:{_tc};">'
-                        f'Fase actualizada — {_pl_now}</span>'
+                        f'<div style="background:{_bg};border:1px solid {_bd};border-radius:6px;'
+                        f'padding:9px 14px;margin-bottom:6px;">'
+                        f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">'
+                        f'<span style="font-size:10px;font-weight:700;color:{_tc};'
+                        f'text-transform:uppercase;letter-spacing:.05em;">Fase actualizada — {_pl_now}</span>'
                         f'{"<span style=\"font-size:11px;color:#94a3b8;margin-left:auto;\">" + _ts_display + "</span>" if _ts_display else ""}'
                         f'</div>'
-                        f'<div style="font-size:11px;color:#64748b;padding-left:23px;">'
+                        f'<div style="font-size:11px;color:#64748b;">'
                         f'Cuando guardaste: <em>{_pl_add}</em>&nbsp;'
                         f'<span style="color:{_tc};font-weight:600;">→ Ahora: {_pl_now}</span>'
                         f'</div>'
@@ -3487,14 +3425,14 @@ with _tab_alertas:
 
                 # ── Row 1: Notes — full-width expander ───────────────────────
                 # All keys prefixed "al_" — never collides with main list "sv_" keys
-                _PRIO_OPTS = ["—", "🔴 P1", "🟡 P2", "🔵 P3"]
-                _PRIO_VAL  = {"—":"0","🔴 P1":"1","🟡 P2":"2","🔵 P3":"3"}
-                _PRIO_BACK = {"0":"—","1":"🔴 P1","2":"🟡 P2","3":"🔵 P3"}
+                _PRIO_OPTS = ["—", "P1 Urgente", "P2 Medio", "P3 Seguimiento"]
+                _PRIO_VAL  = {"—":"0","P1 Urgente":"1","P2 Medio":"2","P3 Seguimiento":"3"}
+                _PRIO_BACK = {"0":"—","1":"P1 Urgente","2":"P2 Medio","3":"P3 Seguimiento"}
                 _cur_label = _PRIO_BACK.get(_pv, "—")
 
                 _note_lbl = (
-                    f"📝 {_note_display[:50]}{'…' if len(_note_display)>50 else ''}"
-                    if _note_display else "📝 Añadir nota privada…"
+                    f"{_note_display[:50]}{'…' if len(_note_display)>50 else ''}"
+                    if _note_display else "Añadir nota privada…"
                 )
                 with st.expander(_note_lbl, expanded=False):
                     _typed = st.text_area(
@@ -3505,15 +3443,15 @@ with _tab_alertas:
                     )
                     _sn_l, _sn_r = st.columns([7, 2])
                     with _sn_r:
-                        if st.button("💾 Guardar nota", key=f"al_save_{_safe_k}",
+                        if st.button("Guardar nota", key=f"al_save_{_safe_k}",
                                      use_container_width=True):
                             st.session_state["alert_notes_local"][_exp_s] = _typed
                             ok = update_watchlist_row(_ua, _exp_s, notes=_typed)
                             if ok:
                                 st.session_state["alert_notes_saved_ok"].add(_exp_s)
-                                st.toast("✅ Nota guardada", icon="💾")
+                                st.toast("Nota guardada")
                             else:
-                                st.toast("⚠️ No se pudo guardar.")
+                                st.toast("No se pudo guardar.")
                             st.rerun()
                     with _sn_l:
                         if _note_saved_ok and _note_display:
@@ -3524,10 +3462,10 @@ with _tab_alertas:
                 # The ↑≡ icon IS inside the button (it's the popover label).
                 # Active priority shown as colour emoji inside the button.
                 _prio_btn_icon = (
-                    "🔴" if _pv == "1" else
-                    "🟡" if _pv == "2" else
-                    "🔵" if _pv == "3" else
-                    "↑≡"
+                    "P1" if _pv == "1" else
+                    "P2" if _pv == "2" else
+                    "P3" if _pv == "3" else
+                    "—"
                 )
                 _r2_sp, _r2_pop, _r2_rm = st.columns([8, 1, 1])
 
@@ -3536,10 +3474,10 @@ with _tab_alertas:
                                     help="Asignar prioridad"):
                         st.markdown("**Prioridad**", unsafe_allow_html=False)
                         # Radio inside popup: —, P1, P2, P3
-                        _pv_radio_map = {"—": "0", "🔴 P1 — Urgente": "1",
-                                         "🟡 P2 — Medio": "2", "🔵 P3 — Seguimiento": "3"}
-                        _pv_radio_back = {"0": "—", "1": "🔴 P1 — Urgente",
-                                          "2": "🟡 P2 — Medio", "3": "🔵 P3 — Seguimiento"}
+                        _pv_radio_map = {"—": "0", "P1 — Urgente": "1",
+                                         "P2 — Medio": "2", "P3 — Seguimiento": "3"}
+                        _pv_radio_back = {"0": "—", "1": "P1 — Urgente",
+                                          "2": "P2 — Medio", "3": "P3 — Seguimiento"}
                         _cur_radio = _pv_radio_back.get(_pv, "—")
                         _chosen = st.radio(
                             "prio_radio",
@@ -3555,7 +3493,7 @@ with _tab_alertas:
                             st.rerun()
 
                 with _r2_rm:
-                    if st.button("🔕", key=f"al_rm_{_safe_k}",
+                    if st.button("×", key=f"al_rm_{_safe_k}",
                                  help="Dejar de seguir",
                                  use_container_width=True):
                         remove_from_watchlist(_ua, _exp_s)
