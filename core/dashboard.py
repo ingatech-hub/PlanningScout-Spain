@@ -677,104 +677,6 @@ div[data-baseweb="select"]:not([data-focused]) input {
 /* Hide "Press Enter to apply" hint */
 [data-testid="InputInstructions"] { display: none !important; }
 
-/* ── SIDEBAR TOGGLE (managed via st.session_state + CSS) ───────────────────
-   When Python sets sidebar_visible=False, this class is injected.
-   The sidebar is hidden and main content expands full-width. */
-body.ps-sidebar-hidden section[data-testid="stSidebar"] {
-    display: none !important;
-    width: 0 !important;
-    min-width: 0 !important;
-}
-body.ps-sidebar-hidden .block-container {
-    padding-left: 2rem !important;
-    max-width: 100vw !important;
-}
-
-/* ── FIX: keyboard_double_arrow text showing as raw string ─────────────────
-   The sidebar collapse button uses Material Icons font. When that font fails
-   to load (CDN block, network issue), the icon name renders as raw text.
-   Strategy: load the font explicitly, then as a fallback hide the text
-   and inject a plain unicode chevron via ::before pseudo-element. */
-
-/* Explicit Material Icons import (backup — main @import is at the top) */
-@font-face {
-    font-family: 'Material Symbols Sharp';
-    font-style: normal;
-    src: url('https://fonts.gstatic.com/s/materialsymbolssharp/v261/Borcbm_fpnkau1laKK-yfsmMCmv78kdf757yuuNRpw.woff2') format('woff2');
-}
-
-/* If the icon name shows as text, these rules erase it and show a ‹ › */
-[data-testid="stSidebarCollapsedControl"] button,
-[data-testid="stSidebar"] > div:first-child > div > button,
-section[data-testid="stSidebar"] div[data-testid="stSidebarCollapsedControl"] button {
-    font-size: 0 !important;
-    color: transparent !important;
-    min-width: 28px !important;
-    min-height: 28px !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    background: #ffffff !important;
-    border: 1px solid #e8eaed !important;
-    border-radius: 6px !important;
-    box-shadow: 0 1px 4px rgba(0,0,0,.06) !important;
-    cursor: pointer !important;
-    transition: box-shadow .15s !important;
-}
-[data-testid="stSidebarCollapsedControl"] button:hover,
-[data-testid="stSidebar"] > div:first-child > div > button:hover {
-    box-shadow: 0 2px 8px rgba(30,58,95,.15) !important;
-    border-color: #1e3a5f !important;
-}
-/* Replace the invisible text with a visible CSS chevron */
-[data-testid="stSidebarCollapsedControl"] button::before,
-[data-testid="stSidebar"] > div:first-child > div > button::before {
-    content: "›" !important;
-    font-size: 18px !important;
-    font-weight: 700 !important;
-    color: #64748b !important;
-    font-family: system-ui, -apple-system, sans-serif !important;
-    display: block !important;
-    line-height: 1 !important;
-}
-/* When sidebar is open, flip the chevron to point left */
-section[data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarCollapsedControl"] button::before,
-section[data-testid="stSidebar"] div[data-testid="stSidebarCollapsedControl"] button::before {
-    content: "‹" !important;
-}
-
-/* Hide the span/svg/text inside the button (the problematic icon element) */
-[data-testid="stSidebarCollapsedControl"] button span,
-[data-testid="stSidebarCollapsedControl"] button svg,
-[data-testid="stSidebar"] > div:first-child > div > button span,
-[data-testid="stSidebar"] > div:first-child > div > button svg {
-    display: none !important;
-}
-
-/* ── FIX: "Select all" English button in multiselect ───────────────────────
-   Streamlit injects an English "Select all" item into the multiselect dropdown.
-   Target it by multiple selectors to handle version differences. */
-[data-testid="stMultiSelect"] [data-baseweb="menu"] li:first-child:has([aria-label*="Select"]),
-[data-baseweb="menu"] [aria-label="Select all"],
-[data-baseweb="menu"] [aria-label*="Select all"],
-[data-testid="stMultiSelect"] ul li:first-child span:empty,
-[data-baseweb="menu"] span[role="option"]:first-child { display: none !important; }
-
-/* ── FIX: Selectbox (sort dropdown) — prevent keyboard typing ─────────────
-   The selectbox <input> acts as a combobox; typing filters options and the
-   typed text shows. Setting caret-color+pointer-events hides cursor + blocks
-   direct mouse-clicks on the input, so typing via selectbox click is prevented. */
-div[data-baseweb="select"] > div > div > input,
-div[data-baseweb="select"] input[type="text"] {
-    caret-color: transparent !important;
-    pointer-events: none !important;
-    user-select: none !important;
-    -webkit-user-select: none !important;
-}
-
-/* ── Keep-alive visual (hidden) ─────────────────────────────────────────── */
-#ps-ka { display: none !important; }
-
 /* Follow button column */
 .seguir-col button {
     font-size: 12px !important;
@@ -909,24 +811,110 @@ div[data-baseweb="select"] input[type="text"] {
 </style>
 """, unsafe_allow_html=True)
 
+# ── Extra CSS + JS (keep-alive, Select-all removal, keyboard_double fix) ────
+st.markdown("""
+<style>
+/* ── FIX A: keyboard_double icon name showing as raw text ────────────────────
+   The sidebar collapse button uses Material Icons. When the font fails to load,
+   the icon name (keyboard_double_arrow_left) renders as raw text.
+   Strategy: hide ALL text/spans inside the control, then inject plain ‹ › via
+   ::before so the button still shows something clickable. */
+@import url("https://fonts.googleapis.com/icon?family=Material+Icons+Sharp");
+
+/* Target the toggle control in all known Streamlit versions */
+[data-testid="stSidebarCollapsedControl"] > div > button,
+[data-testid="stSidebarCollapsedControl"] button {
+    font-size: 0 !important;          /* hide icon-name text */
+    color: transparent !important;
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 7px !important;
+    min-width: 30px !important;
+    min-height: 30px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    cursor: pointer !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,.07) !important;
+    transition: box-shadow .15s, border-color .15s !important;
+}
+[data-testid="stSidebarCollapsedControl"] > div > button:hover,
+[data-testid="stSidebarCollapsedControl"] button:hover {
+    border-color: #1e3a5f !important;
+    box-shadow: 0 2px 8px rgba(30,58,95,.18) !important;
+}
+/* Hide the span/svg that renders as icon or text */
+[data-testid="stSidebarCollapsedControl"] button span,
+[data-testid="stSidebarCollapsedControl"] button svg { display: none !important; }
+/* Inject visible chevron via pseudo-element (system font — always loads) */
+[data-testid="stSidebarCollapsedControl"] > div > button::after,
+[data-testid="stSidebarCollapsedControl"] button::after {
+    content: "›" !important;
+    display: block !important;
+    font-size: 18px !important;
+    font-family: system-ui, -apple-system, sans-serif !important;
+    color: #475569 !important;
+    font-weight: 700 !important;
+    line-height: 1 !important;
+}
+/* When sidebar IS open the chevron should point left */
+section[data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarCollapsedControl"] button::after {
+    content: "‹" !important;
+}
+
+/* ── FIX B: prevent selectbox from being typed into ─────────────────────────
+   CSS alone is not enough. The st.radio fix below (Patch 2) is the real fix.
+   This CSS is a secondary guard for any other selectboxes. */
+div[data-baseweb="select"] input[type="text"] {
+    caret-color: transparent !important;
+    color: transparent !important;
+    text-shadow: 0 0 0 #374151 !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    pointer-events: none !important;
+    cursor: pointer !important;
+}
+</style>
+
+<script>
+/* ── FIX B: Remove "Select all" English button from multiselect dropdowns ─────
+   Streamlit's BaseWeb multiselect injects an English "Select all" list item.
+   CSS cannot select by text content, so we use a MutationObserver to watch
+   for the dropdown appearing and immediately hide any "Select all" items. */
+(function() {
+    function removeSelectAll() {
+        document.querySelectorAll('[role="option"]').forEach(function(opt) {
+            var txt = (opt.textContent || opt.innerText || "").trim();
+            if (txt === "Select all" || txt === "Select All") {
+                opt.style.display = "none";
+                opt.setAttribute("aria-hidden", "true");
+            }
+        });
+    }
+    // Watch for any DOM changes (dropdown opens/closes)
+    var _obs = new MutationObserver(removeSelectAll);
+    _obs.observe(document.body, { childList: true, subtree: true });
+    // Also run immediately in case dropdown is already open
+    removeSelectAll();
+})();
+
+/* ── FIX C: Keep-alive — fetch own URL every 25 min while tab is open ────────
+   Prevents Streamlit Community Cloud from sleeping during active sessions.
+   For zero-traffic periods: set up UptimeRobot (free) to ping every 5 min. */
+(function() {
+    setInterval(function() {
+        try { fetch(window.location.href, { method: "GET", mode: "no-cors", cache: "no-cache" }); }
+        catch(e) {}
+    }, 25 * 60 * 1000);
+})();
+</script>
+""", unsafe_allow_html=True)
+
 # ════════════════════════════════════════════════════════════
 # INLINE STYLE CONSTANTS
 # All card HTML uses these — bypasses Streamlit's Markdown parser.
 # Single quotes inside double-quoted Python strings = valid, no escaping.
 # ════════════════════════════════════════════════════════════
-# ── Sidebar visibility state ──────────────────────────────────────────────
-# Tracks whether the sidebar is shown or hidden. st.button toggles toggle it.
-# This must be initialised BEFORE the sidebar is rendered.
-if "ps_sb_open" not in st.session_state:
-    st.session_state["ps_sb_open"] = True
-
-# When hidden, inject CSS that collapses the sidebar panel.
-if not st.session_state["ps_sb_open"]:
-    st.markdown("""<style>
-section[data-testid="stSidebar"] { display:none !important; width:0 !important; }
-.block-container { padding-left:2rem !important; max-width:100vw !important; }
-</style>""", unsafe_allow_html=True)
-
 _F  = "font-family:'Plus Jakarta Sans',system-ui,sans-serif"
 _FH = "font-family:'Fraunces',Georgia,serif"
 _FM = "font-family:'JetBrains Mono',monospace"
@@ -2611,15 +2599,6 @@ is_locked = _is_email_user
 # ════════════════════════════════════════════════════════════
 with st.sidebar:
 
-    # ── Sidebar close button (tiny arrow, top-right corner of sidebar) ─────────
-    # Must be a real st.button — only Streamlit widgets can trigger reruns.
-    # Placed FIRST so it always shows before any content.
-    _sb_col1, _sb_col2 = st.columns([9, 1])
-    with _sb_col2:
-        if st.button("‹", key="ps_close_sb", help="Ocultar panel de filtros"):
-            st.session_state["ps_sb_open"] = False
-            st.rerun()
-
     # Crisp logo — base64 embedded, no resizing blur
     st.markdown(LOGO_HTML, unsafe_allow_html=True)
     st.markdown('<div style="height:1px;background:#e2e8f0;margin:14px 0 16px;"></div>', unsafe_allow_html=True)
@@ -2663,7 +2642,7 @@ with st.sidebar:
     # the document was recently detected. Removed to reduce friction. All leads within the
     # profile's days window (e.g. 365 days) are shown; users can sort by date instead.
     days_back = prof["days"]   # use profile default, not a user-selected value
-    min_pem   = st.number_input("PEM mínimo (€)", value=int(prof.get("min_value", 0) or 0), min_value=0, step=50_000, format="%d")
+    min_pem   = st.number_input("PEM mínimo (€)", value=int(prof.get("min_value") or 0), min_value=0, step=50_000, format="%d")
     min_score = st.slider("Puntuación mínima", 0, 100, value=prof["min_score"], step=5)
 
     # ── Phase filter ──
@@ -2680,7 +2659,7 @@ with st.sidebar:
         placeholder="Todas las fases",
     )
 
-    muni_sel = st.multiselect("Municipio", options=all_munis, default=[], placeholder="Todos los municipios")
+    muni_sel  = st.multiselect("Municipio", options=all_munis, placeholder="Todos")
     st.caption(f"{len(all_munis)} municipios disponibles")
     aw_sel = []  # Urgencia removed — field data not reliable enough yet
 
@@ -2699,7 +2678,7 @@ with st.sidebar:
 
     st.markdown('<div style="height:1px;background:#e2e8f0;margin:14px 0 16px;"></div>', unsafe_allow_html=True)
 
-    if st.button("↺  Actualizar datos", use_container_width=True, key="refresh_data_btn"):
+    if st.button("Actualizar datos"):
         st.cache_data.clear()
         st.rerun()
 
@@ -2920,26 +2899,6 @@ def remove_from_watchlist(user_email: str, expediente: str) -> bool:
 emoji_part = selected_profile.split()[0]
 name_part  = " ".join(selected_profile.split()[1:])
 
-# ── Sidebar show button — only rendered when sidebar is hidden ──────────────
-# When sidebar is hidden we need a real st.button in the main area to re-open it.
-if not st.session_state.get("ps_sb_open", True):
-    _btn_c1, _btn_c2, _btn_c3 = st.columns([1, 10, 1])
-    with _btn_c1:
-        # Styled via CSS below; this is a native st.button so it triggers reruns
-        if st.button("› Filtros", key="ps_open_sb", help="Mostrar panel de filtros"):
-            st.session_state["ps_sb_open"] = True
-            st.rerun()
-    st.markdown("""
-<style>
-button[data-testid="baseButton-secondary"][key="ps_open_sb"],
-div[data-testid="stButton"]:has(button[key="ps_open_sb"]) button {
-    font-size:11px !important;padding:4px 10px !important;height:auto !important;
-    background:#1e3a5f !important;color:#fff !important;
-    border:1px solid #1e3a5f !important;border-radius:6px !important;
-    white-space:nowrap !important;font-weight:600 !important;
-}
-</style>""", unsafe_allow_html=True)
-
 st.markdown(f"""
 <div style="margin-bottom:24px;padding-bottom:18px;border-bottom:1px solid #e2e8f0;">
   <h1 style="font-family:'Fraunces',Georgia,serif;font-weight:700;
@@ -3142,20 +3101,6 @@ st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 # ════════════════════════════════════════════════════════════
 # TABS — Lista de leads  |  Mapa interactivo
 # ════════════════════════════════════════════════════════════
-# ── Keep-alive heartbeat: fetch app's own URL every 25 min while tab is open.
-# Prevents Streamlit Community Cloud from putting the app to sleep during
-# active sessions. For zero-traffic periods, use UptimeRobot (free, 5-min interval).
-st.markdown("""<span id='ps-ka'></span>
-<script>
-(function(){
-  function psKA(){
-    try{ fetch(window.location.href,{method:'GET',mode:'no-cors',cache:'no-cache'}); }
-    catch(e){}
-  }
-  setInterval(psKA, 25*60*1000); // 25 minutes
-})();
-</script>""", unsafe_allow_html=True)
-
 _tab_leads, _tab_mapa, _tab_alertas = st.tabs([
     "Lista de proyectos",
     "Mapa interactivo",
@@ -3208,12 +3153,14 @@ with _tab_leads:
                     "fecha_desc": "Más reciente",
                     "fecha_asc":  "Más antiguo",
                 }
-                # st.radio with horizontal=True cannot be typed into — fully fixes
-                # the "user typed 'hg' in the sort box" bug. Looks clean for 4 options.
-                _sort_order = st.selectbox(
+                # st.radio with horizontal=True renders as radio buttons — no
+                # text input at all, so it can never be typed into. This is the
+                # definitive fix for the "hg" editable-dropdown bug.
+                _sort_order = st.radio(
                     "Ordenar por",
                     options=list(_SORT_OPTIONS.keys()),
                     format_func=lambda k: _SORT_OPTIONS[k],
+                    horizontal=True,
                     index=0,
                     key="sort_order_sel",
                     label_visibility="collapsed",
