@@ -403,6 +403,64 @@ header[data-testid="stHeader"] { display: none !important; }
 }
 
 [data-testid="InputInstructions"] { display: none !important; }
+
+/* ── FIX: keyboard_double_arrow text showing as raw string ─────────────────
+   In some Streamlit versions the sidebar collapse button renders the Material
+   Icon NAME ("keyboard_double_arrow_left") as visible text instead of the icon.
+   We hide the text and provide our own unicode arrow so the button still works. */
+button[data-testid="collapsedControl"] {
+    font-size: 0 !important;
+    color: transparent !important;
+    width: 28px !important;
+    height: 28px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+button[data-testid="collapsedControl"]::after {
+    content: "◀" !important;
+    font-size: 13px !important;
+    color: #94a3b8 !important;
+    font-family: system-ui, sans-serif !important;
+}
+/* When sidebar is collapsed, flip the arrow */
+[data-testid="stSidebar"][aria-expanded="false"] button[data-testid="collapsedControl"]::after {
+    content: "▶" !important;
+}
+
+/* ── FIX: Hide Streamlit's English "Select all" in multiselect ─────────────
+   st.multiselect shows an English "Select all" option internally.
+   Hide it via CSS — the placeholder= param already gives Spanish text. */
+[data-testid="stMultiSelect"] li[aria-selected="false"]:first-child,
+[data-baseweb="menu"] li:first-child[aria-label*="Select all"],
+[data-baseweb="menu"] li[aria-label="Select all"],
+[data-baseweb="select"] [aria-label="Select all"],
+[data-testid*="VirtualizedList"] li:first-child span:only-child {
+    display: none !important;
+}
+
+/* ── FIX: Prevent typing in the sort selectbox ─────────────────────────────
+   st.selectbox acts as a combobox in newer Streamlit — clicking it and pressing
+   keys filters options, but the text shows in the input, confusing users.
+   Make the cursor invisible and block keyboard text entry. */
+div[data-testid="stSelectbox"] input {
+    caret-color: transparent !important;
+    color: transparent !important;
+    text-shadow: 0 0 0 #374151 !important;
+    cursor: default !important;
+}
+div[data-testid="stSelectbox"] div[role="combobox"] {
+    cursor: pointer !important;
+}
+
+/* ── Keep-alive spinner hidden (heartbeat fetch is invisible) ────────────── */
+#ps-keepalive { display: none !important; }
+
+/* ── Sidebar toggle button ──────────────────────────────────────────────── */
+[data-testid="stSidebar"].sidebar-hidden {
+    transform: translateX(-110%) !important;
+    transition: transform 0.25s ease !important;
+}
 </style>""", unsafe_allow_html=True)
 
     # Header HTML — sits directly in block-container, no wrapper div
@@ -2543,7 +2601,7 @@ with st.sidebar:
     # the document was recently detected. Removed to reduce friction. All leads within the
     # profile's days window (e.g. 365 days) are shown; users can sort by date instead.
     days_back = prof["days"]   # use profile default, not a user-selected value
-    min_pem   = st.number_input("PEM mínimo (€)", value=prof["min_value"], min_value=0, step=50_000, format="%d")
+    min_pem   = st.number_input("PEM mínimo (€)", value=int(prof["min_value"]), min_value=0, step=50_000, format="%d")
     min_score = st.slider("Puntuación mínima", 0, 100, value=prof["min_score"], step=5)
 
     # ── Phase filter ──
@@ -2557,10 +2615,18 @@ with st.sidebar:
         "Fase del proyecto",
         options=list(_FASE_OPTIONS.keys()),
         format_func=lambda k: _FASE_OPTIONS[k],
+        default=[],
         placeholder="Todas las fases",
+        label_visibility="visible",
     )
 
-    muni_sel  = st.multiselect("Municipio", options=all_munis, placeholder="Todos")
+    muni_sel = st.multiselect(
+        "Municipio",
+        options=all_munis,
+        default=[],
+        placeholder="Todos los municipios",
+        label_visibility="visible",
+    )
     st.caption(f"{len(all_munis)} municipios disponibles")
     aw_sel = []  # Urgencia removed — field data not reliable enough yet
 
@@ -2579,7 +2645,7 @@ with st.sidebar:
 
     st.markdown('<div style="height:1px;background:#e2e8f0;margin:14px 0 16px;"></div>', unsafe_allow_html=True)
 
-    if st.button("Actualizar datos"):
+    if st.button("↺ Actualizar datos", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
@@ -2800,6 +2866,34 @@ def remove_from_watchlist(user_email: str, expediente: str) -> bool:
 emoji_part = selected_profile.split()[0]
 name_part  = " ".join(selected_profile.split()[1:])
 
+# ── Sidebar toggle (injected JS clicks Streamlit's native collapse btn) ───────
+st.markdown("""
+<script>
+function psSidebarToggle() {
+    // Try Streamlit's native sidebar collapse control
+    var btn = document.querySelector('button[data-testid="collapsedControl"]');
+    if (!btn) {
+        // Fallback: look for the sidebar expand icon
+        var sidebar = document.querySelector('[data-testid="stSidebar"]');
+        if (sidebar) sidebar.style.display = sidebar.style.display === 'none' ? '' : 'none';
+        return;
+    }
+    btn.click();
+}
+// Expose globally so onclick handler below can call it
+window.psSidebarToggle = psSidebarToggle;
+</script>
+<div style="position:absolute;top:18px;right:18px;z-index:999;">
+  <button onclick="psSidebarToggle()" title="Mostrar/ocultar filtros"
+          style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;
+                 padding:5px 11px;cursor:pointer;font-size:12px;font-weight:600;
+                 color:#64748b;font-family:'Plus Jakarta Sans',system-ui,sans-serif;
+                 box-shadow:0 1px 3px rgba(0,0,0,.06);white-space:nowrap;">
+    ⇆ Filtros
+  </button>
+</div>
+""", unsafe_allow_html=True)
+
 st.markdown(f"""
 <div style="margin-bottom:24px;padding-bottom:18px;border-bottom:1px solid #e2e8f0;">
   <h1 style="font-family:'Fraunces',Georgia,serif;font-weight:700;
@@ -2999,6 +3093,22 @@ if not df_f.empty:
 
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
+# ── Keep-alive heartbeat ─────────────────────────────────────────────────────
+# Streamlit Community Cloud sleeps apps after 7 days of zero traffic.
+# This JS snippet fetches the app's own URL every 25 minutes while a user
+# has the tab open, preventing sleep during active sessions.
+# For zero-traffic periods, use UptimeRobot (free) to ping every 6 hours.
+st.markdown("""
+<script>
+(function(){
+  var _ps_ka = setInterval(function(){
+    fetch(window.location.href, {method:'GET', mode:'no-cors', cache:'no-cache'})
+      .catch(function(){});
+  }, 25 * 60 * 1000); // 25 minutes
+})();
+</script>
+""", unsafe_allow_html=True)
+
 # ════════════════════════════════════════════════════════════
 # TABS — Lista de leads  |  Mapa interactivo
 # ════════════════════════════════════════════════════════════
@@ -3051,14 +3161,22 @@ with _tab_leads:
                 _SORT_OPTIONS = {
                     "relevancia":  "Relevancia",
                     "puntuacion":  "Puntuación",
-                    "fecha_desc":  "Fecha más reciente",
-                    "fecha_asc":  "Fecha más antigua",
+                    "fecha_desc":  "Más reciente",
+                    "fecha_asc":   "Más antiguo",
                 }
+                # Use selectbox with disabled keyboard input (pointer-events:none via CSS).
+                # index= is always supplied so the widget never tries to infer from the
+                # current session value, which caused the editable-text bug in some versions.
+                _sort_sel_idx = list(_SORT_OPTIONS.keys()).index(
+                    st.session_state.get("sort_order_sel", "relevancia")
+                    if st.session_state.get("sort_order_sel") in _SORT_OPTIONS
+                    else "relevancia"
+                )
                 _sort_order = st.selectbox(
-                    "Ordenar",
+                    "Ordenar por",
                     options=list(_SORT_OPTIONS.keys()),
                     format_func=lambda k: _SORT_OPTIONS[k],
-                    index=0,
+                    index=_sort_sel_idx,
                     key="sort_order_sel",
                     label_visibility="collapsed",
                 )
