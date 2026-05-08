@@ -809,27 +809,73 @@ div[data-baseweb="select"]:not([data-focused]) input {
     .main .block-container { background: #f4f5f7 !important; }
 }
 
-/* ── FIX: "keyboard_double" raw text at top of sidebar ──────────────────────
-   Material Symbols font sometimes fails to load on Streamlit Cloud, causing
-   the icon name to render as visible text. This hides the text and replaces
-   it with a system-font chevron that always loads. */
+/* ── FIX: keyboard_double_arrow_left raw text in sidebar ─────────────────────
+   Root cause: Streamlit uses Material Symbols font for the sidebar collapse
+   button icon. When the font fails to load on Streamlit Cloud, the icon NAME
+   ("keyboard_double_arrow_left") renders as visible raw text.
+
+   The button lives in different elements depending on Streamlit version:
+   - 1.35+  : [data-testid="stSidebarHeader"] > button
+   - 1.35+  : button[data-testid="baseButton-headerNoPadding"]
+   - older  : [data-testid="stSidebarCollapsedControl"] button (when open)
+
+   Fix: make ALL text in any of these buttons invisible, hide child spans/svgs,
+   then inject a plain ‹ chevron via ::after using system-ui (always loads). */
+
+[data-testid="stSidebarHeader"],
+[data-testid="stSidebarHeader"] * {
+    font-size: 0 !important;
+    line-height: 0 !important;
+    color: transparent !important;
+}
+[data-testid="stSidebarHeader"] button {
+    visibility: visible !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-width: 2rem !important;
+    min-height: 2rem !important;
+    overflow: hidden !important;
+}
+[data-testid="stSidebarHeader"] button::after,
+button[data-testid="baseButton-headerNoPadding"]::after {
+    content: "‹" !important;
+    visibility: visible !important;
+    font-size: 18px !important;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif !important;
+    color: #94a3b8 !important;
+    display: block !important;
+    line-height: 1 !important;
+}
+
+button[data-testid="baseButton-headerNoPadding"] {
+    font-size: 0 !important;
+    color: transparent !important;
+    line-height: 0 !important;
+    overflow: hidden !important;
+}
+button[data-testid="baseButton-headerNoPadding"] * {
+    display: none !important;
+}
+
+/* Also fix the collapsed-state control (when sidebar is closed, expand button) */
 [data-testid="stSidebarCollapsedControl"] button {
     font-size: 0 !important;
     color: transparent !important;
     line-height: 0 !important;
+    overflow: hidden !important;
 }
 [data-testid="stSidebarCollapsedControl"] button span,
 [data-testid="stSidebarCollapsedControl"] button svg {
     display: none !important;
 }
 [data-testid="stSidebarCollapsedControl"] button::after {
-    content: "‹";
-    font-size: 18px;
-    font-family: system-ui, -apple-system, sans-serif;
-    color: #64748b;
-    display: block;
-    line-height: 1;
-    font-weight: 400;
+    content: "›" !important;
+    font-size: 18px !important;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif !important;
+    color: #94a3b8 !important;
+    display: block !important;
+    line-height: 1 !important;
 }
 </style>
 """, unsafe_allow_html=True)
