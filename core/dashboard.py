@@ -811,105 +811,6 @@ div[data-baseweb="select"]:not([data-focused]) input {
 </style>
 """, unsafe_allow_html=True)
 
-# ── Extra CSS + JS (keep-alive, Select-all removal, keyboard_double fix) ────
-st.markdown("""
-<style>
-/* ── FIX A: keyboard_double icon name showing as raw text ────────────────────
-   The sidebar collapse button uses Material Icons. When the font fails to load,
-   the icon name (keyboard_double_arrow_left) renders as raw text.
-   Strategy: hide ALL text/spans inside the control, then inject plain ‹ › via
-   ::before so the button still shows something clickable. */
-@import url("https://fonts.googleapis.com/icon?family=Material+Icons+Sharp");
-
-/* Target the toggle control in all known Streamlit versions */
-[data-testid="stSidebarCollapsedControl"] > div > button,
-[data-testid="stSidebarCollapsedControl"] button {
-    font-size: 0 !important;          /* hide icon-name text */
-    color: transparent !important;
-    background: #ffffff !important;
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 7px !important;
-    min-width: 30px !important;
-    min-height: 30px !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    cursor: pointer !important;
-    box-shadow: 0 1px 3px rgba(0,0,0,.07) !important;
-    transition: box-shadow .15s, border-color .15s !important;
-}
-[data-testid="stSidebarCollapsedControl"] > div > button:hover,
-[data-testid="stSidebarCollapsedControl"] button:hover {
-    border-color: #1e3a5f !important;
-    box-shadow: 0 2px 8px rgba(30,58,95,.18) !important;
-}
-/* Hide the span/svg that renders as icon or text */
-[data-testid="stSidebarCollapsedControl"] button span,
-[data-testid="stSidebarCollapsedControl"] button svg { display: none !important; }
-/* Inject visible chevron via pseudo-element (system font — always loads) */
-[data-testid="stSidebarCollapsedControl"] > div > button::after,
-[data-testid="stSidebarCollapsedControl"] button::after {
-    content: "›" !important;
-    display: block !important;
-    font-size: 18px !important;
-    font-family: system-ui, -apple-system, sans-serif !important;
-    color: #475569 !important;
-    font-weight: 700 !important;
-    line-height: 1 !important;
-}
-/* When sidebar IS open the chevron should point left */
-section[data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarCollapsedControl"] button::after {
-    content: "‹" !important;
-}
-
-/* ── FIX B: prevent selectbox from being typed into ─────────────────────────
-   CSS alone is not enough. The st.radio fix below (Patch 2) is the real fix.
-   This CSS is a secondary guard for any other selectboxes. */
-div[data-baseweb="select"] input[type="text"] {
-    caret-color: transparent !important;
-    color: transparent !important;
-    text-shadow: 0 0 0 #374151 !important;
-    user-select: none !important;
-    -webkit-user-select: none !important;
-    pointer-events: none !important;
-    cursor: pointer !important;
-}
-</style>
-
-<script>
-/* ── FIX B: Remove "Select all" English button from multiselect dropdowns ─────
-   Streamlit's BaseWeb multiselect injects an English "Select all" list item.
-   CSS cannot select by text content, so we use a MutationObserver to watch
-   for the dropdown appearing and immediately hide any "Select all" items. */
-(function() {
-    function removeSelectAll() {
-        document.querySelectorAll('[role="option"]').forEach(function(opt) {
-            var txt = (opt.textContent || opt.innerText || "").trim();
-            if (txt === "Select all" || txt === "Select All") {
-                opt.style.display = "none";
-                opt.setAttribute("aria-hidden", "true");
-            }
-        });
-    }
-    // Watch for any DOM changes (dropdown opens/closes)
-    var _obs = new MutationObserver(removeSelectAll);
-    _obs.observe(document.body, { childList: true, subtree: true });
-    // Also run immediately in case dropdown is already open
-    removeSelectAll();
-})();
-
-/* ── FIX C: Keep-alive — fetch own URL every 25 min while tab is open ────────
-   Prevents Streamlit Community Cloud from sleeping during active sessions.
-   For zero-traffic periods: set up UptimeRobot (free) to ping every 5 min. */
-(function() {
-    setInterval(function() {
-        try { fetch(window.location.href, { method: "GET", mode: "no-cors", cache: "no-cache" }); }
-        catch(e) {}
-    }, 25 * 60 * 1000);
-})();
-</script>
-""", unsafe_allow_html=True)
-
 # ════════════════════════════════════════════════════════════
 # INLINE STYLE CONSTANTS
 # All card HTML uses these — bypasses Streamlit's Markdown parser.
@@ -2642,7 +2543,7 @@ with st.sidebar:
     # the document was recently detected. Removed to reduce friction. All leads within the
     # profile's days window (e.g. 365 days) are shown; users can sort by date instead.
     days_back = prof["days"]   # use profile default, not a user-selected value
-    min_pem   = st.number_input("PEM mínimo (€)", value=int(prof.get("min_value") or 0), min_value=0, step=50_000, format="%d")
+    min_pem   = st.number_input("PEM mínimo (€)", value=prof["min_value"], min_value=0, step=50_000, format="%d")
     min_score = st.slider("Puntuación mínima", 0, 100, value=prof["min_score"], step=5)
 
     # ── Phase filter ──
@@ -3148,19 +3049,15 @@ with _tab_leads:
                 )
             with _sort_col2:
                 _SORT_OPTIONS = {
-                    "relevancia": "Relevancia",
-                    "puntuacion": "Puntuación",
-                    "fecha_desc": "Más reciente",
-                    "fecha_asc":  "Más antiguo",
+                    "relevancia":  "Relevancia",
+                    "puntuacion":  "Puntuación",
+                    "fecha_desc":  "Fecha más reciente",
+                    "fecha_asc":  "Fecha más antigua",
                 }
-                # st.radio with horizontal=True renders as radio buttons — no
-                # text input at all, so it can never be typed into. This is the
-                # definitive fix for the "hg" editable-dropdown bug.
-                _sort_order = st.radio(
-                    "Ordenar por",
+                _sort_order = st.selectbox(
+                    "Ordenar",
                     options=list(_SORT_OPTIONS.keys()),
                     format_func=lambda k: _SORT_OPTIONS[k],
-                    horizontal=True,
                     index=0,
                     key="sort_order_sel",
                     label_visibility="collapsed",
