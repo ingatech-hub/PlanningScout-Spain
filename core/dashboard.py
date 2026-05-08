@@ -808,6 +808,29 @@ div[data-baseweb="select"]:not([data-focused]) input {
     section[data-testid="stMainBlockContainer"],
     .main .block-container { background: #f4f5f7 !important; }
 }
+
+/* ── FIX: "keyboard_double" raw text at top of sidebar ──────────────────────
+   Material Symbols font sometimes fails to load on Streamlit Cloud, causing
+   the icon name to render as visible text. This hides the text and replaces
+   it with a system-font chevron that always loads. */
+[data-testid="stSidebarCollapsedControl"] button {
+    font-size: 0 !important;
+    color: transparent !important;
+    line-height: 0 !important;
+}
+[data-testid="stSidebarCollapsedControl"] button span,
+[data-testid="stSidebarCollapsedControl"] button svg {
+    display: none !important;
+}
+[data-testid="stSidebarCollapsedControl"] button::after {
+    content: "‹";
+    font-size: 18px;
+    font-family: system-ui, -apple-system, sans-serif;
+    color: #64748b;
+    display: block;
+    line-height: 1;
+    font-weight: 400;
+}
 </style>
 """, unsafe_allow_html=True)
 
