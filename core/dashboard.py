@@ -858,12 +858,44 @@ button[data-testid="baseButton-headerNoPadding"] * {
     display: none !important;
 }
 
-/* Also fix the collapsed-state control (when sidebar is closed, expand button) */
+/* Collapsed-state control — shown at left edge when sidebar is closed.
+   Must be clearly visible so users can re-open the sidebar. */
+
+/* Desktop: position the control at the left edge, vertically centred */
+[data-testid="stSidebarCollapsedControl"] {
+    position: fixed !important;
+    top: 50% !important;
+    left: 0 !important;
+    transform: translateY(-50%) !important;
+    z-index: 9999 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
 [data-testid="stSidebarCollapsedControl"] button {
-    font-size: 0 !important;
+    font-size: 0 !important;         /* hide any icon-name raw text */
     color: transparent !important;
     line-height: 0 !important;
-    overflow: hidden !important;
+    overflow: visible !important;    /* allow ::after to show */
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    border-left: none !important;
+    border-radius: 0 8px 8px 0 !important;
+    width: 22px !important;
+    height: 48px !important;
+    min-width: 22px !important;
+    min-height: 48px !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    box-shadow: 2px 0 6px rgba(0,0,0,0.08) !important;
+    padding: 0 !important;
+}
+[data-testid="stSidebarCollapsedControl"] button:hover {
+    background: #f8fafc !important;
+    border-color: #1e3a5f !important;
+    box-shadow: 2px 0 10px rgba(30,58,95,0.15) !important;
 }
 [data-testid="stSidebarCollapsedControl"] button span,
 [data-testid="stSidebarCollapsedControl"] button svg {
@@ -872,10 +904,24 @@ button[data-testid="baseButton-headerNoPadding"] * {
 [data-testid="stSidebarCollapsedControl"] button::after {
     content: "›" !important;
     font-size: 18px !important;
+    font-weight: 700 !important;
     font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif !important;
-    color: #94a3b8 !important;
-    display: block !important;
+    color: #64748b !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
     line-height: 1 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+/* On mobile the existing @media block already positions this control */
+@media (max-width: 768px) {
+    [data-testid="stSidebarCollapsedControl"] {
+        top: 8px !important;
+        left: 8px !important;
+        transform: none !important;
+    }
 }
 </style>
 """, unsafe_allow_html=True)
