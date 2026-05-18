@@ -514,7 +514,7 @@ footer { visibility: hidden !important; }
 [data-testid="manage-app-button"]  { display: none !important; }
 
 /* Base background */
-.stApp { background: #f4f5f7 !important; }
+.stApp { background: #f4f6f8 !important; }
 
 /* Main content */
 .block-container {
@@ -543,11 +543,12 @@ footer { visibility: hidden !important; }
     font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
 }
 [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
-    font-size: 11px !important;
-    font-weight: 600 !important;
-    color: #6b7280 !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    color: #9ca3af !important;
     text-transform: uppercase !important;
-    letter-spacing: .06em !important;
+    letter-spacing: .08em !important;
+    font-family: 'JetBrains Mono', monospace !important;
 }
 
 /* Download button */
@@ -629,16 +630,32 @@ footer { visibility: hidden !important; }
 }
 
 /* Tabs — clean underline style */
-[data-testid="stTabs"] button {
+[data-testid="stTabs"] [role="tablist"] {
+    border-bottom: 1px solid #e8eaed !important;
+    gap: 0 !important;
+}
+[data-testid="stTabs"] button[role="tab"] {
     font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
     font-size: 13px !important;
     font-weight: 500 !important;
     color: #6b7280 !important;
-    padding: 8px 14px !important;
+    padding: 10px 16px !important;
+    border-radius: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    border-bottom: 2px solid transparent !important;
+    margin-bottom: -1px !important;
+    transition: color .15s !important;
 }
-[data-testid="stTabs"] button[aria-selected="true"] {
+[data-testid="stTabs"] button[role="tab"]:hover {
     color: #1e3a5f !important;
-    font-weight: 600 !important;
+    background: transparent !important;
+}
+[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+    color: #1e3a5f !important;
+    font-weight: 700 !important;
+    border-bottom: 2px solid #1e3a5f !important;
+    background: transparent !important;
 }
 
 /* Selectbox: disable typing */
@@ -763,10 +780,10 @@ div[data-baseweb="select"]:not([data-focused]) input {
 /* Force light mode */
 @media (prefers-color-scheme: dark) {
     html, body, .stApp {
-        background-color: #f4f5f7 !important;
+        background-color: #f4f6f8 !important;
         color: #1e3a5f !important;
     }
-    .stApp { background: #f4f5f7 !important; color: #1e3a5f !important; }
+    .stApp { background: #f4f6f8 !important; color: #1e3a5f !important; }
     [data-testid="stSidebar"] {
         background: #ffffff !important;
         border-right: 1px solid #e8eaed !important;
@@ -806,7 +823,7 @@ div[data-baseweb="select"]:not([data-focused]) input {
     [data-testid="stTabs"] button { color: #475569 !important; }
     [data-testid="stTabs"] button[aria-selected="true"] { color: #1e3a5f !important; }
     section[data-testid="stMainBlockContainer"],
-    .main .block-container { background: #f4f5f7 !important; }
+    .main .block-container { background: #f4f6f8 !important; }
 }
 
 /* ── FIX: keyboard_double_arrow_left raw text in sidebar ─────────────────────
@@ -935,23 +952,23 @@ _F  = "font-family:'Plus Jakarta Sans',system-ui,sans-serif"
 _FH = "font-family:'Fraunces',Georgia,serif"
 _FM = "font-family:'JetBrains Mono',monospace"
 
-# Card wrapper
-SC = "background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,.04);"
-# Header
-SH  = "background:#fafbfc;border-bottom:1px solid #f1f5f9;padding:11px 18px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;"
+# Card wrapper — base (overridden dynamically in build_card with phase color)
+SC = "background:#fff;border:1px solid #e8eaed;border-radius:12px;overflow:hidden;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.05);"
+# Header — pure white for clean contrast
+SH  = "background:#fff;border-bottom:1px solid #f1f5f9;padding:12px 18px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;"
 SLO = "display:flex;align-items:flex-start;gap:8px;min-width:0;flex:1;"
-SDO = "width:3px;height:16px;border-radius:2px;background:#1e3a5f;flex-shrink:0;margin-top:3px;"
+SDO = "width:3px;height:18px;border-radius:2px;background:#1e3a5f;flex-shrink:0;margin-top:2px;"
 SMU = f"{_FH};font-size:13px;font-weight:700;color:#0d1a2b;line-height:1.3;"
 SBD = "display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;"
-# Score pills — refined, no emoji
-SSPG = f"{_FM};font-size:11px;font-weight:600;padding:3px 10px;border-radius:6px;white-space:nowrap;color:#fff;background:#15803d;"
-SSPO = f"{_FM};font-size:11px;font-weight:600;padding:3px 10px;border-radius:6px;white-space:nowrap;color:#fff;background:#b45309;"
-SSPN = f"{_FM};font-size:11px;font-weight:600;padding:3px 10px;border-radius:6px;white-space:nowrap;color:#fff;background:#1e3a5f;"
-SSPD = f"{_FM};font-size:11px;font-weight:600;padding:3px 10px;border-radius:6px;white-space:nowrap;color:#94a3b8;background:#f1f5f9;"
-# Status badges — subtle outlined
-SSBG = f"{_FM};font-size:10px;font-weight:500;padding:3px 9px;border-radius:5px;white-space:nowrap;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;"
-SSBA = f"{_FM};font-size:10px;font-weight:500;padding:3px 9px;border-radius:5px;white-space:nowrap;background:#fffbeb;color:#b45309;border:1px solid #fde68a;"
-SSBN = f"{_FM};font-size:10px;font-weight:500;padding:3px 9px;border-radius:5px;white-space:nowrap;background:#f0f4ff;color:#3b4fa8;border:1px solid #c7d2fe;"
+# Score pills — white text on solid dark background (high contrast)
+SSPG = f"{_FM};font-size:11px;font-weight:700;padding:3px 10px;border-radius:6px;white-space:nowrap;color:#fff;background:#15803d;"
+SSPO = f"{_FM};font-size:11px;font-weight:700;padding:3px 10px;border-radius:6px;white-space:nowrap;color:#fff;background:#92400e;"
+SSPN = f"{_FM};font-size:11px;font-weight:700;padding:3px 10px;border-radius:6px;white-space:nowrap;color:#fff;background:#1e3a5f;"
+SSPD = f"{_FM};font-size:11px;font-weight:600;padding:3px 10px;border-radius:6px;white-space:nowrap;color:#4b5563;background:#f3f4f6;border:1px solid #e5e7eb;"
+# Status badges — ALWAYS dark text on light background of same hue (high contrast, no clash)
+SSBG = f"{_FM};font-size:10px;font-weight:600;padding:3px 9px;border-radius:5px;white-space:nowrap;background:#dcfce7;color:#14532d;border:1px solid #86efac;"
+SSBA = f"{_FM};font-size:10px;font-weight:600;padding:3px 9px;border-radius:5px;white-space:nowrap;background:#fef3c7;color:#78350f;border:1px solid #fcd34d;"
+SSBN = f"{_FM};font-size:10px;font-weight:600;padding:3px 9px;border-radius:5px;white-space:nowrap;background:#dbeafe;color:#1e3a5f;border:1px solid #93c5fd;"
 # Body
 SBO  = "padding:14px 18px;"
 SRF  = f"{_FM};font-size:10px;color:#94a3b8;margin-bottom:4px;letter-spacing:.03em;"
@@ -965,9 +982,9 @@ SKE  = f"{_FM};font-size:9.5px;color:#94a3b8;text-transform:uppercase;letter-spa
 SVA  = f"{_F};font-size:13px;color:#334155;text-align:right;line-height:1.4;"
 SVP  = f"{_FH};font-size:16px;font-weight:700;color:#1e3a5f;"
 STG  = "display:flex;gap:5px;justify-content:flex-end;flex-wrap:wrap;"
-STA2 = f"{_FM};font-size:10px;background:#fffbeb;color:#b45309;border:1px solid #fde68a;padding:2px 7px;border-radius:4px;"
-STN  = f"{_FM};font-size:10px;background:#f0f4ff;color:#3b4fa8;border:1px solid #c7d2fe;padding:2px 7px;border-radius:4px;"
-STG2 = f"{_FM};font-size:10px;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;padding:2px 7px;border-radius:4px;"
+STA2 = f"{_FM};font-size:10px;background:#fef3c7;color:#78350f;border:1px solid #fcd34d;padding:2px 7px;border-radius:4px;"
+STN  = f"{_FM};font-size:10px;background:#dbeafe;color:#1e3a5f;border:1px solid #93c5fd;padding:2px 7px;border-radius:4px;"
+STG2 = f"{_FM};font-size:10px;background:#dcfce7;color:#14532d;border:1px solid #86efac;padding:2px 7px;border-radius:4px;"
 # Footer
 SFO  = "background:#fafbfc;border-top:1px solid #f1f5f9;padding:9px 18px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;"
 SBP  = f"{_F};display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:#fff;background:#1e3a5f;border:1px solid #1e3a5f;padding:5px 12px;border-radius:6px;text-decoration:none;white-space:nowrap;"
@@ -1454,8 +1471,8 @@ def build_compact_row(row: dict, full_card_html: str) -> str:
     if pem_display > 0:
         pem_s = fmt(pem_display)
         is_est = pem_raw_v == 0
-        _pem_style = (f"{_FM};font-size:10px;font-weight:600;padding:4px 10px;border-radius:100px;"
-                      f"white-space:nowrap;background:#fffbeb;color:#b45309;border:1px solid #fde68a;")
+        _pem_style = (f"{_FM};font-size:10px;font-weight:700;padding:4px 10px;border-radius:100px;"
+                      f"white-space:nowrap;background:#fef3c7;color:#78350f;border:1px solid #fcd34d;")
         _pem_suffix = " Est." if is_est else ""
         tags.append(f'<span style="{_pem_style}">{pem_s}{_pem_suffix}</span>')
 
@@ -1491,10 +1508,21 @@ def build_compact_row(row: dict, full_card_html: str) -> str:
         f'</summary>'
     )
 
+    # Phase border for compact row wrapper
+    _PHASE_BORDER_CR = {
+        "adjudicacion": "#ef4444", "en_obra": "#ef4444",
+        "licitacion": "#1e3a5f",   "definitivo": "#16a34a",
+        "primera_ocupacion": "#7c3aed", "inicial": "#d97706",
+        "en_tramite": "#64748b",   "solicitud": "#94a3b8",
+    }
+    _cr_fase = str(row.get("fase","") or "").lower()
+    _cr_border = _PHASE_BORDER_CR.get(_cr_fase, "#e8eaed")
+
     # Wrapper: card border, subtle hover, open state highlights border
     return (
-        f'<details style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;'
-        f'margin-bottom:6px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.03);">'
+        f'<details style="background:#fff;border:1px solid #e8eaed;'
+        f'border-left:3px solid {_cr_border};border-radius:0 12px 12px 0;'
+        f'margin-bottom:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.04);">'
         f'{summary_html}'
         f'<div style="border-top:1px solid #f1f5f9;">'
         f'{full_card_html}'
@@ -1508,6 +1536,24 @@ def build_card(row, is_watched=False, inside_details=False):
     This guarantees correct rendering regardless of Streamlit's Markdown parser.
     All data values are html.escape()'d to prevent broken HTML.
     """
+    # ── Phase-colored left border — instant visual urgency hierarchy ─────────
+    _PHASE_BORDER = {
+        "adjudicacion":     "#ef4444",   # red   — call today
+        "en_obra":          "#ef4444",   # red   — on site now
+        "licitacion":       "#1e3a5f",   # navy  — active tender
+        "definitivo":       "#16a34a",   # green — approved, pipeline open
+        "primera_ocupacion":"#7c3aed",   # purple — building done
+        "inicial":          "#d97706",   # amber  — early phase
+        "en_tramite":       "#64748b",   # slate  — in process
+        "solicitud":        "#94a3b8",   # gray   — pre-lead
+    }
+    _card_fase   = str(row.get("fase","") or "").lower()
+    _border_clr  = _PHASE_BORDER.get(_card_fase, "#e8eaed")
+    SC_CARD = (
+        f"background:#fff;border:1px solid #e8eaed;border-left:3px solid {_border_clr};"
+        f"border-radius:0 12px 12px 0;overflow:hidden;margin-bottom:12px;"
+        f"box-shadow:0 1px 4px rgba(0,0,0,.05);"
+    )
     sc    = parse_sc(row.get("score_raw", 0))
     pem   = parse_val(row.get("pem_raw", ""))         # declared PEM (numeric col F)
     pem_est_text = str(row.get("pem_est_raw", "") or "").strip()  # raw text from col R
@@ -1710,8 +1756,8 @@ def build_card(row, is_watched=False, inside_details=False):
         pem_row_val = (
             f'<div style="display:flex;align-items:center;gap:8px;">'
             f'<span style="{SVP}">{pem_s}</span>'
-            f'<span style="{_FM};font-size:9px;font-weight:600;background:#dbeafe;'
-            f'color:#1e40af;border-radius:4px;padding:2px 6px;letter-spacing:.04em;">✓ BOCM</span>'
+            f'<span style="{_FM};font-size:9px;font-weight:700;background:#dbeafe;'
+            f'color:#1e3a5f;border-radius:4px;padding:2px 6px;letter-spacing:.04em;">✓ BOCM</span>'
             f'</div>'
         )
         all_row_data.append(("PEM Declarado", pem_row_val))
@@ -1720,11 +1766,11 @@ def build_card(row, is_watched=False, inside_details=False):
         _est_display = _html_esc.escape(pem_est_text[:220])
         _is_confirmed = "✅" in pem_est_text or "confirmado" in pem_est_text.lower()
         _badge_style = (
-            f"{_FM};font-size:9px;font-weight:600;background:#dbeafe;color:#1e40af;"
+            f"{_FM};font-size:9px;font-weight:700;background:#dbeafe;color:#1e3a5f;"
             f"border-radius:4px;padding:2px 6px;letter-spacing:.04em;flex-shrink:0;"
         ) if _is_confirmed else (
-            f"{_FM};font-size:9px;font-weight:600;background:#fffbeb;color:#b45309;"
-            f"border-radius:4px;border:1px solid #fde68a;padding:2px 6px;letter-spacing:.04em;flex-shrink:0;"
+            f"{_FM};font-size:9px;font-weight:700;background:#fef3c7;color:#78350f;"
+            f"border-radius:4px;border:1px solid #fcd34d;padding:2px 6px;letter-spacing:.04em;flex-shrink:0;"
         )
         _badge_label = "✓ Confirmado" if _is_confirmed else "⚡ Est. IA"
         pem_row_val = (
@@ -1845,10 +1891,10 @@ def build_card(row, is_watched=False, inside_details=False):
     # Phase (col Q) — shown as a tag row
     fase_val = str(row.get("fase", "") or "").strip()
     _FASE_LABELS = {
-        "definitivo":        ("Aprobación definitiva",  "#f0fdf4", "#16a34a", "#bbf7d0"),
-        "inicial":           ("Aprobación inicial",     "#fffbeb", "#b45309", "#fde68a"),
-        "licitacion":        ("Licitación activa",      "#eff4fb", "#1e3a5f", "#bfdbfe"),
-        "en_tramite":        ("En trámite",             "#fff7ed", "#c2410c", "#fed7aa"),
+        "definitivo":        ("Aprobación definitiva",  "#dcfce7", "#14532d", "#86efac"),
+        "inicial":           ("Aprobación inicial",     "#fef3c7", "#78350f", "#fcd34d"),
+        "licitacion":        ("Licitación activa",      "#dbeafe", "#1e3a5f", "#93c5fd"),
+        "en_tramite":        ("En trámite",             "#ffedd5", "#7c2d12", "#fdba74"),
     }
     if fase_val and fase_val in _FASE_LABELS:
         ft, fb, fc, fbd = _FASE_LABELS[fase_val]
@@ -2089,7 +2135,7 @@ def build_card(row, is_watched=False, inside_details=False):
         )
 
     return (
-        f'<div style="{SC}">'
+        f'<div style="{SC_CARD}">'
         f'{head}'
         f'<div style="{SBO}">'
         f'{ref_html}'
@@ -2402,9 +2448,9 @@ def build_map(df_map, profile_key="general"):
         else:
             pem_s = "PEM no declarado"
 
-        # Score badge colour
+        # Score badge colour — always dark text on light background
         sc_bg = "#dcfce7" if score >= 65 else ("#fef3c7" if score >= 40 else "#f1f5f9")
-        sc_fg = "#16a34a" if score >= 65 else ("#b45309" if score >= 40 else "#64748b")
+        sc_fg = "#14532d" if score >= 65 else ("#78350f" if score >= 40 else "#374151")
 
         # Precision indicator (only show when approximate)
         prec_note = ""
@@ -2416,7 +2462,7 @@ def build_map(df_map, profile_key="general"):
         # Pre-lead badge
         prelead_badge = ""
         if fase == "solicitud":
-            prelead_badge = "<span style='background:#fef3c7;color:#b45309;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-right:4px;'>PRE-LEAD</span>"
+            prelead_badge = "<span style='background:#fef3c7;color:#78350f;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-right:4px;'>PRE-LEAD</span>"
 
         # Links
         link_bocm  = f'<a href="{bocm}" target="_blank" style="color:#1e3a5f;font-weight:600;font-size:12px;text-decoration:none;">↗ Ver BOCM</a>' if bocm else ""
@@ -3072,23 +3118,41 @@ elif total_pem >= 1_000:
 else:
     total_pem_s = "—"
 
-c1, c2 = st.columns(2)
-for col, (val, lbl, clr) in zip(
-    [c1, c2],
+c1, c2, c3, c4 = st.columns(4)
+for col, (val, lbl, clr, bg) in zip(
+    [c1, c2, c3, c4],
     [
-        (str(count),      "Proyectos detectados", "#1c3458"),
-        (str(high_leads), "Prioritarios",         "#16a34a"),
+        (str(count),        "Proyectos",        "#0d1a2b",  "#f8fafc"),
+        (str(high_leads),   "Prioritarios",     "#14532d",  "#dcfce7"),
+        (total_pem_s,       "PEM total",        "#1e3a5f",  "#dbeafe"),
+        (f"{avg_score}",    "Score medio",      "#78350f",  "#fef3c7"),
     ]
 ):
     with col:
         st.markdown(f"""
-        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;
-             padding:16px 20px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04);">
-          <span style="font-family:'Fraunces',Georgia,serif;font-size:26px;font-weight:700;
-                color:{clr};line-height:1;display:block;margin-bottom:5px;">{val}</span>
-          <span style="font-family:'JetBrains Mono',monospace;font-size:9.5px;
-                color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;">{lbl}</span>
+        <div style="background:{bg};border:1px solid #e8eaed;border-radius:10px;
+             padding:14px 16px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.03);">
+          <span style="font-family:'Fraunces',Georgia,serif;font-size:24px;font-weight:700;
+                color:{clr};line-height:1;display:block;margin-bottom:4px;">{val}</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:9px;
+                color:#6b7280;text-transform:uppercase;letter-spacing:.08em;">{lbl}</span>
         </div>""", unsafe_allow_html=True)
+
+# Phase legend — one row, no color clashes
+st.markdown("""
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 4px;
+     padding:10px 14px;background:#fff;border:1px solid #e8eaed;border-radius:10px;">
+  <span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#94a3b8;
+        text-transform:uppercase;letter-spacing:.08em;margin-right:4px;">Fase:</span>
+  <span style="display:flex;align-items:center;gap:4px;font-family:'Plus Jakarta Sans',system-ui;font-size:11px;color:#374151;">
+    <span style="width:10px;height:10px;border-radius:2px;background:#ef4444;flex-shrink:0;"></span>Adjudicada / En obra</span>
+  <span style="display:flex;align-items:center;gap:4px;font-family:'Plus Jakarta Sans',system-ui;font-size:11px;color:#374151;">
+    <span style="width:10px;height:10px;border-radius:2px;background:#1e3a5f;flex-shrink:0;"></span>Licitación activa</span>
+  <span style="display:flex;align-items:center;gap:4px;font-family:'Plus Jakarta Sans',system-ui;font-size:11px;color:#374151;">
+    <span style="width:10px;height:10px;border-radius:2px;background:#16a34a;flex-shrink:0;"></span>Aprobación definitiva</span>
+  <span style="display:flex;align-items:center;gap:4px;font-family:'Plus Jakarta Sans',system-ui;font-size:11px;color:#374151;">
+    <span style="width:10px;height:10px;border-radius:2px;background:#d97706;flex-shrink:0;"></span>Aprobación inicial</span>
+</div>""", unsafe_allow_html=True)
 
 # ── Tip ──
 _tip_clean = re.sub(r'(?:💡|🔴|🟡|🟢|🔵|🟠|⚪)\s*', '', prof["tip"])
@@ -3497,14 +3561,14 @@ with _tab_alertas:
                             _ts_display = _last_updated[:16]
                     # Urgency color by new phase
                     _urgency_colors = {
-                        "adjudicacion":      ("#fef2f2","#dc2626","#fecaca","Adjudicación"),
-                        "en_obra":           ("#fef2f2","#dc2626","#fecaca","Obra activa"),
-                        "licitacion":        ("#fffbeb","#b45309","#fde68a","Licitación"),
-                        "definitivo":        ("#eff6ff","#1d4ed8","#bfdbfe","Definitivo"),
-                        "primera_ocupacion": ("#f0fdf4","#15803d","#bbf7d0","1ª Ocupación"),
+                        "adjudicacion":      ("#fef2f2","#991b1b","#fecaca","Adjudicación"),
+                        "en_obra":           ("#fef2f2","#991b1b","#fecaca","Obra activa"),
+                        "licitacion":        ("#fef3c7","#78350f","#fcd34d","Licitación"),
+                        "definitivo":        ("#dbeafe","#1e3a5f","#93c5fd","Definitivo"),
+                        "primera_ocupacion": ("#dcfce7","#14532d","#86efac","1ª Ocupación"),
                     }
                     _bg, _tc, _bd, _phase_label_u = _urgency_colors.get(
-                        _phase_now.lower(), ("#eff6ff","#1d4ed8","#bfdbfe","Actualizado"))
+                        _phase_now.lower(), ("#dbeafe","#1e3a5f","#93c5fd","Actualizado"))
                     st.markdown(
                         f'<div style="background:{_bg};border:1px solid {_bd};border-radius:6px;'
                         f'padding:9px 14px;margin-bottom:6px;">'
